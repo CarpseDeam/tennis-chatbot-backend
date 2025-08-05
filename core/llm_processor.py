@@ -28,7 +28,6 @@ except Exception as e:
 
 MODEL_NAME = "models/gemini-1.5-flash-latest"
 
-# --- NEW SYSTEM INSTRUCTION TO CONTROL RESPONSE STYLE ---
 SYSTEM_INSTRUCTION = "You are a helpful and direct tennis assistant. When you have the answer from a tool, respond with only the answer, concisely and directly. Do not mention your tools, the API, or that you performed a web search. For example, instead of 'Based on my search, Player A won', your entire response should be just 'Player A won'."
 
 model = genai.GenerativeModel(
@@ -70,8 +69,7 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
             logger.info(f"Turn {turn_num + 1}: Sending prompt to Gemini. Prompt type: {type(prompt).__name__}")
             response = await chat.send_message_async(prompt)
 
-            # --- SAFETY NET LOGIC ---
-            # Check if the model is asking a question without using a tool on the first turn
+            # --- NEW, CORRECTED SAFETY NET LOGIC ---
             is_clarification_question = (
                     turn_num == 0
                     and not response.parts[0].function_call
@@ -79,25 +77,22 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
             )
 
             if is_clarification_question:
-                logger.warning("LLM asked for clarification instead of using a tool. Forcing a web search.")
+                logger.warning("LLM asked for clarification. Forcing a web search to provide context.")
 
-                # Manually perform a web search with the original query
                 tool_output = perform_web_search(request.query)
-                source_name = "web_search_client: perform_web_search"
-                if source_name not in used_sources:
-                    used_sources.append(source_name)
+                used_sources.append("web_search_client: perform_web_search")
 
-                logger.info(f"Forced web search returned: {tool_output}")
+                web_context = tool_output.get('context') or tool_output.get('summary') or "No information found."
 
-                # Create the tool response part to send back to the LLM
-                prompt = [genai.protos.Part(
-                    function_response=genai.protos.FunctionResponse(
-                        name="perform_web_search",
-                        response=tool_output
-                    )
-                )]
-                # Skip to the next turn to send this new info to the LLM
-                continue
+                # Construct a new, better prompt with the context we found.
+                new_prompt = (
+                    f"Context from a web search: {web_context}\n\n"
+                    f"Based ONLY on the context above, please answer my original question: '{request.query}'"
+                )
+
+                # Send this new prompt to the model immediately to get a new response
+                logger.info("Sending new enriched prompt to Gemini after forced web search.")
+                response = await chat.send_message_async(new_prompt)
             # --- END OF SAFETY NET LOGIC ---
 
             try:
