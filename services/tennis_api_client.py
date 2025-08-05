@@ -94,13 +94,11 @@ def get_player_match_result_by_date(player_name: str, date: str) -> Dict[str, An
         if player_name.lower() in home_player or player_name.lower() in away_player:
             logger.info(f"Found match for '{player_name}': {event}")
 
-            # --- UPGRADED "SUPER-TOOL" LOGIC ---
             event_id = event.get("event_id")
             if event_id:
                 logger.info(f"Found event_id {event_id}, now fetching detailed statistics.")
                 stats_data = get_event_statistics(str(event_id))
 
-                # Merge the stats into the main event data if successful
                 if "error" not in stats_data:
                     logger.info("Successfully fetched stats, merging with event data.")
                     event.update(stats_data)
@@ -147,7 +145,6 @@ def _find_player_id_by_name(player_name: str) -> Optional[int]:
         logger.warning(f"Could not find a matching player for '{name_to_match}' in the provided API results.")
         return None
 
-    # --- Search Strategy 1: Use the full name ---
     logger.info(f"Strategy 1: Searching API with full name '{player_name}'")
     full_name_quoted = urllib.parse.quote(player_name)
     search_data = _make_request(f"api/tennis/search/{full_name_quoted}")
@@ -155,7 +152,6 @@ def _find_player_id_by_name(player_name: str) -> Optional[int]:
     if player_id:
         return player_id
 
-    # --- Search Strategy 2: Use the last name (if available) ---
     name_parts = player_name.split()
     if len(name_parts) > 1:
         last_name = name_parts[-1]
@@ -201,7 +197,8 @@ def _find_common_event_id_in_calendar(player1_id: int, player2_id: int) -> Optio
 
 def get_h2h_events(player1_name: str, player2_name: str) -> Dict[str, Any]:
     logger.info(f"H2H: Starting lookup for '{player1_name}' vs '{player2_name}'")
-    player1_id = _find_player__by_name(player1_name)
+    # --- THIS IS THE FIX ---
+    player1_id = _find_player_id_by_name(player1_name)
     player2_id = _find_player_id_by_name(player2_name)
 
     if not all([player1_id, player2_id]):
