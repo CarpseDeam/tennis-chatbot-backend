@@ -79,10 +79,19 @@ def debug_api_search(player_name: str) -> Dict[str, Any]:
 
 
 def _find_player_id_by_name(player_name: str) -> Optional[int]:
+    """
+    Finds a player's ID using a multi-strategy search.
+    1. Tries searching for the full name.
+    2. If that fails, tries searching for the last name.
+    """
     logger.info(f"Attempting to find player ID for: '{player_name}'")
 
     def find_player_in_results(data: Dict[str, Any], name_to_match: str) -> Optional[int]:
+        """
+        Helper function to iterate through search results and find the best match.
+        """
         if "error" in data or not data.get("results"):
+            logger.warning("API returned no results or an error for this search query.")
             return None
 
         input_name_parts = name_to_match.lower().split()
@@ -91,22 +100,38 @@ def _find_player_id_by_name(player_name: str) -> Optional[int]:
             entity = result.get("entity", {})
             if result.get("type") == "player" and entity.get("sport", {}).get("name") == "Tennis":
                 api_name = entity.get("name", "").lower()
+
                 if all(part in api_name for part in input_name_parts):
                     player_id = entity.get("id")
                     if isinstance(player_id, int):
                         logger.info(
-                            f"SUCCESS: Found player ID {player_id} for '{name_to_match}' (API name: '{api_name}')")
+                            f"SUCCESS: Found player ID {player_id} for '{name_to_match}' (API name: '{api_name}')"
+                        )
                         return player_id
 
-        logger.warning(f"Could not find a matching player for '{name_to_match}' in API results.")
+        logger.warning(f"Could not find a matching player for '{name_to_match}' in the provided API results.")
         return None
 
-    search_term_quoted = urllib.parse.quote(player_name)
-    search_data = _make_request(f"api/tennis/search/{search_term_quoted}")
+    # --- Search Strategy 1: Use the full name ---
+    logger.info(f"Strategy 1: Searching API with full name '{player_name}'")
+    full_name_quoted = urllib.parse.quote(player_name)
+    search_data = _make_request(f"api/tennis/search/{full_name_quoted}")
     player_id = find_player_in_results(search_data, player_name)
-
     if player_id:
         return player_id
+
+    # --- Search Strategy 2: Use the last name (if available) ---
+    name_parts = player_name.split()
+    if len(name_parts) > 1:
+        last_name = name_parts[-1]
+        logger.info(f"Strategy 1 failed. Strategy 2: Searching API with last name only: '{last_name}'")
+        last_name_quoted = urllib.parse.quote(last_name)
+        search_data = _make_request(f"api/tennis/search/{last_name_quoted}")
+
+        # We still use the original full 'player_name' for matching to find the correct person
+        player_id = find_player_in_results(search_data, player_name)
+        if player_id:
+            return player_id
 
     logger.error(f"All search strategies failed for '{player_name}'.")
     return None
@@ -217,7 +242,6 @@ def _process_h2h_data_and_return(h2h_data: Dict[str, Any], player1_id: int, play
 
 def get_scheduled_events_by_date(date: str) -> Dict[str, Any]:
     try:
-        # --- THIS BLOCK IS NOW CORRECTLY INDENTED ---
         if date.lower() == 'today':
             target_date = datetime.date.today()
         elif date.lower() == 'tomorrow':
@@ -237,7 +261,6 @@ def get_live_events() -> Dict[str, Any]:
 
 def get_odds_by_date(date: str) -> Dict[str, Any]:
     try:
-        # --- THIS BLOCK IS ALSO NOW CORRECTLY INDENTED ---
         if date.lower() == 'today':
             target_date = datetime.date.today()
         elif date.lower() == 'tomorrow':
