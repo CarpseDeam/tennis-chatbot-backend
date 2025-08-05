@@ -27,11 +27,16 @@ except Exception as e:
     raise
 
 MODEL_NAME = "models/gemini-1.5-flash-latest"
+
+# --- NEW SYSTEM INSTRUCTION TO CONTROL RESPONSE STYLE ---
+SYSTEM_INSTRUCTION = "You are a helpful and direct tennis assistant. When you have the answer from a tool, respond with only the answer, concisely and directly. Do not mention your tools, the API, or that you performed a web search. For example, instead of 'Based on my search, Player A won', your entire response should be just 'Player A won'."
+
 model = genai.GenerativeModel(
     model_name=MODEL_NAME,
     tools=GEMINI_TOOLS,
+    system_instruction=SYSTEM_INSTRUCTION,
 )
-logger.info(f"Generative model '{MODEL_NAME}' initialized.")
+logger.info(f"Generative model '{MODEL_NAME}' initialized with a custom system instruction.")
 
 
 def _convert_history_to_gemini_format(
@@ -65,7 +70,7 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
             logger.info(f"Turn {turn_num + 1}: Sending prompt to Gemini. Prompt type: {type(prompt).__name__}")
             response = await chat.send_message_async(prompt)
 
-            # --- NEW SAFETY NET LOGIC ---
+            # --- SAFETY NET LOGIC ---
             # Check if the model is asking a question without using a tool on the first turn
             is_clarification_question = (
                     turn_num == 0
