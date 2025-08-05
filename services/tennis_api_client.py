@@ -31,7 +31,6 @@ def _process_event_list(raw_data: Dict[str, Any]) -> Dict[str, Any]:
             away_team_info = event.get("awayTeam", {})
             status_info = event.get("status", {})
 
-            # --- THIS IS THE FIX: Keep the score information! ---
             home_score_info = event.get("homeScore", {})
             away_score_info = event.get("awayScore", {})
 
@@ -204,6 +203,7 @@ def _find_common_event_id_in_calendar(player1_id: int, player2_id: int) -> Optio
 
 def get_h2h_events(player1_name: str, player2_name: str) -> Dict[str, Any]:
     logger.info(f"H2H: Starting lookup for '{player1_name}' vs '{player2_name}'")
+    # --- TYPO IS NOW FIXED ---
     player1_id = _find_player_id_by_name(player1_name)
     player2_id = _find_player_id_by_name(player2_name)
 
