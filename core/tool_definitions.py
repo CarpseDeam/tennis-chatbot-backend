@@ -27,9 +27,10 @@ logger = logging.getLogger(__name__)
 
 # --- Tool Definitions for the Gemini API ---
 
+# --- UPGRADED DESCRIPTION FOR THE SUPER-TOOL ---
 get_player_match_result_by_date_func = FunctionDeclaration(
     name="get_player_match_result_by_date",
-    description="Finds a single player's match result on a specific day. Use this for questions about ONE player, like 'Did [player] win today?' or 'What was the outcome of [player]'s match yesterday?'.",
+    description="Finds a single player's match on a specific day and gets all available statistics for it. Use this to answer questions like 'Did [player] win today?', 'What was the score of the [player] match?', or 'How many aces did [player] have yesterday?'.",
     parameters=Schema(
         type=Type.OBJECT,
         properties={
@@ -53,7 +54,6 @@ get_h2h_events_func = FunctionDeclaration(
     ),
 )
 
-# --- UPDATED DESCRIPTION FOR WEB SEARCH ---
 perform_web_search_func = FunctionDeclaration(
     name="perform_web_search",
     description="The best tool for general or ambiguous questions. Use this if a query involves multiple players in a way that isn't H2H, like 'did shelton or coballi win?'. Also use for news, history, or if other tools fail or don't apply.",
@@ -68,7 +68,7 @@ get_scheduled_events_by_date_func = FunctionDeclaration(
 )
 get_live_events_func = FunctionDeclaration(name="get_live_events", description="Fetches all tennis matches that are currently live. Provides real-time score information and event IDs.",)
 get_odds_by_date_func = FunctionDeclaration(name="get_odds_by_date", description="Fetches betting odds for matches on a specific date. The 'date' parameter can be 'today', 'tomorrow', or a specific date in 'YYYY-MM-DD' format.", parameters=Schema(type=Type.OBJECT, properties={"date": Schema(type=Type.STRING, description="The date to fetch odds for. Can be 'today', 'tomorrow', or a date like '2024-12-25'.")}, required=["date"],),)
-get_event_statistics_func = FunctionDeclaration(name="get_event_statistics", description="Fetches detailed statistics for a single, specific match using its event ID. First, find the event ID using get_scheduled_events_by_date or get_live_events.", parameters=Schema(type=Type.OBJECT, properties={"event_id": Schema(type=Type.STRING, description="The unique identifier for the tennis match.")}, required=["event_id"],),)
+get_event_statistics_func = FunctionDeclaration(name="get_event_statistics", description="Fetches detailed statistics for a single, specific match using its event ID. First, find the event ID using other tools.", parameters=Schema(type=Type.OBJECT, properties={"event_id": Schema(type=Type.STRING, description="The unique identifier for the tennis match.")}, required=["event_id"],),)
 get_player_performance_func = FunctionDeclaration(name="get_player_performance", description="Fetches the recent match history for a specific player using their player ID. Useful for analyzing a player's recent form.", parameters=Schema(type=Type.OBJECT, properties={"player_id": Schema(type=Type.STRING, description="The unique identifier for the player.")}, required=["player_id"],),)
 get_rankings_func = FunctionDeclaration(name="get_rankings", description="Fetches the official world tennis rankings for either men (ATP) or women (WTA).", parameters=Schema(type=Type.OBJECT, properties={"ranking_type": Schema(type=Type.STRING, description="The type of ranking to fetch. Must be either 'atp' or 'wta'.")}, required=["ranking_type"],),)
 debug_api_search_func = FunctionDeclaration(name="debug_api_search", description="(FOR DEBUGGING) Fetches the raw JSON results from the player search API to see what the API returns for a given player's name.", parameters=Schema(type=Type.OBJECT, properties={"player_name": Schema(type=Type.STRING, description="The full name of the player to search for, e.g., 'Carlos Alcaraz'.")}, required=["player_name"],),)

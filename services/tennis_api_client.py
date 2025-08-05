@@ -73,12 +73,12 @@ def _make_request(full_url_path: str) -> Dict[str, Any]:
 
 def get_player_match_result_by_date(player_name: str, date: str) -> Dict[str, Any]:
     """
-    A high-level function to find a single player's match result on a specific day.
+    A high-level function to find a single player's match and its stats on a specific day.
     """
-    logger.info(f"Searching for match result for '{player_name}' on date '{date}'")
+    logger.info(f"Searching for match result and stats for '{player_name}' on date '{date}'")
 
-    # Get all scheduled events for that day
     daily_events_data = get_scheduled_events_by_date(date)
+    logger.info(f"Received from API for date '{date}': {daily_events_data}")
 
     if "error" in daily_events_data:
         return daily_events_data
@@ -87,21 +87,31 @@ def get_player_match_result_by_date(player_name: str, date: str) -> Dict[str, An
     if not events:
         return {"summary": f"I couldn't find any matches scheduled for {date}."}
 
-    # Search for the player in the list of events
     for event in events:
         home_player = event.get("home_player", "").lower()
         away_player = event.get("away_player", "").lower()
 
         if player_name.lower() in home_player or player_name.lower() in away_player:
             logger.info(f"Found match for '{player_name}': {event}")
+
+            # --- UPGRADED "SUPER-TOOL" LOGIC ---
+            event_id = event.get("event_id")
+            if event_id:
+                logger.info(f"Found event_id {event_id}, now fetching detailed statistics.")
+                stats_data = get_event_statistics(str(event_id))
+
+                # Merge the stats into the main event data if successful
+                if "error" not in stats_data:
+                    logger.info("Successfully fetched stats, merging with event data.")
+                    event.update(stats_data)
+
             return {
-                "summary": f"Found a match for {player_name}.",
+                "summary": f"Found a match and its statistics for {player_name}.",
                 "match_details": event
             }
 
     logger.warning(f"Could not find a match for '{player_name}' in the schedule for {date}.")
-    return {
-        "summary": f"I couldn't find a match for {player_name} on {date}. It's possible they did not play, or the match was on a different day."}
+    return {"summary": f"I couldn't find a match for {player_name} on {date}. It's possible they did not play, or the information isn't available in my database."}
 
 
 def debug_api_search(player_name: str) -> Dict[str, Any]:
@@ -185,14 +195,13 @@ def _find_common_event_id_in_calendar(player1_id: int, player2_id: int) -> Optio
                 event_id = event.get("id")
                 logger.info(f"Found common match {event_id} in calendar scan for {month}/{year}.")
                 return event_id
-    logger.warning(
-        f"Calendar scan over {len(_get_past_months(24))} months found no common event for players {player1_id} and {player2_id}.")
+    logger.warning(f"Calendar scan over {len(_get_past_months(24))} months found no common event for players {player1_id} and {player2_id}.")
     return None
 
 
 def get_h2h_events(player1_name: str, player2_name: str) -> Dict[str, Any]:
     logger.info(f"H2H: Starting lookup for '{player1_name}' vs '{player2_name}'")
-    player1_id = _find_player_id_by_name(player1_name)
+    player1_id = _find_player__by_name(player1_name)
     player2_id = _find_player_id_by_name(player2_name)
 
     if not all([player1_id, player2_id]):
@@ -255,14 +264,10 @@ def _process_h2h_data_and_return(h2h_data: Dict[str, Any], player1_id: int, play
             home_id = match.get("homeTeam", {}).get("id")
             away_id = match.get("awayTeam", {}).get("id")
 
-            if winner_code == 1 and home_id == player1_id:
-                p1_wins += 1
-            elif winner_code == 1 and home_id == player2_id:
-                p2_wins += 1
-            elif winner_code == 2 and away_id == player1_id:
-                p1_wins += 1
-            elif winner_code == 2 and away_id == player2_id:
-                p2_wins += 1
+            if winner_code == 1 and home_id == player1_id: p1_wins += 1
+            elif winner_code == 1 and home_id == player2_id: p2_wins += 1
+            elif winner_code == 2 and away_id == player1_id: p1_wins += 1
+            elif winner_code == 2 and away_id == player2_id: p2_wins += 1
 
         summary_text = ""
         if p1_wins > p2_wins:
@@ -282,7 +287,6 @@ def _process_h2h_data_and_return(h2h_data: Dict[str, Any], player1_id: int, play
 
 def get_scheduled_events_by_date(date: str) -> Dict[str, Any]:
     try:
-        # --- THIS FUNCTION IS NOW MORE ROBUST ---
         date_str_lower = date.lower()
         if date_str_lower == 'today':
             target_date = datetime.date.today()
@@ -305,7 +309,6 @@ def get_live_events() -> Dict[str, Any]:
 
 def get_odds_by_date(date: str) -> Dict[str, Any]:
     try:
-        # We should make this one robust too!
         date_str_lower = date.lower()
         if date_str_lower == 'today':
             target_date = datetime.date.today()
