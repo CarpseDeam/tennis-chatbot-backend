@@ -1,19 +1,48 @@
 """
 Contains all functions that directly interact with the external Tennis API
 and other external data sources like the current date.
+
+This module is built for asynchronous I/O using httpx to ensure non-blocking
+requests to the external Tennis API, making the application fast and scalable.
 """
 
 import logging
 import datetime
 import urllib.parse
 from typing import Any, Dict, Optional, List, Tuple
-
-import requests
+import asyncio
+import httpx
 
 from config import settings
 from services.web_search_client import perform_web_search
 
 logger = logging.getLogger(__name__)
+
+
+async def _make_request_async(full_url_path: str) -> Dict[str, Any]:
+    """
+    Performs an asynchronous GET request to the Tennis API.
+    """
+    url = f"https://{settings.tennis_api_host}/{full_url_path}"
+    headers = {
+        "X-RapidAPI-Key": settings.tennis_api_key,
+        "X-RapidAPI-Host": settings.tennis_api_host,
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, timeout=20)
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as http_err:
+        logger.error(f"HTTP error for {url}: {http_err.response.status_code} - {http_err.response.text}", exc_info=True)
+        return {
+            "error": f"API request failed with status {http_err.response.status_code}. Response: {http_err.response.text}"}
+    except httpx.RequestError as req_err:
+        logger.error(f"Request error for {url}: {req_err}", exc_info=True)
+        return {"error": "Could not connect to the Tennis API."}
+    except ValueError:
+        logger.error(f"Failed to decode JSON from {url}", exc_info=True)
+        return {"error": "Received invalid data from the Tennis API."}
 
 
 def _process_event_list(raw_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -30,7 +59,6 @@ def _process_event_list(raw_data: Dict[str, Any]) -> Dict[str, Any]:
             home_team_info = event.get("homeTeam", {})
             away_team_info = event.get("awayTeam", {})
             status_info = event.get("status", {})
-
             home_score_info = event.get("homeScore", {})
             away_score_info = event.get("awayScore", {})
 
@@ -55,37 +83,64 @@ def _process_event_list(raw_data: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": "Failed to parse the data from the Tennis API."}
 
 
-def _make_request(full_url_path: str) -> Dict[str, Any]:
-    url = f"https://{settings.tennis_api_host}/{full_url_path}"
-    headers = {
-        "X-RapidAPI-Key": settings.tennis_api_key,
-        "X-RapidAPI-Host": settings.tennis_api_host,
-    }
+def _simplify_match_data(event_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Takes the full, complex event and statistics data and returns a clean,
+    concise summary perfect for an LLM.
+    """
     try:
-        response = requests.get(url, headers=headers, timeout=20)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.HTTPError as http_err:
-        logger.error(f"HTTP error for {url}: {http_err.response.status_code} - {http_err.response.text}", exc_info=True)
+        home_score = event_data.get("home_score", {})
+        away_score = event_data.get("away_score", {})
+
+        # The API gives winnerCode for the *away* team in the home player's score object sometimes.
+        # We check both home and away score objects for a definitive winner code.
+        winner_code = home_score.get("winnerCode", away_score.get("winnerCode"))
+
+        winner_name = "N/A"
+        if winner_code == 1:  # Home player wins
+            winner_name = event_data.get("home_player")
+        elif winner_code == 2:  # Away player wins
+            winner_name = event_data.get("away_player")
+
+        score_summary = []
+        for i in range(1, 6):  # Check for up to 5 sets
+            period_key = f"period{i}"
+            if period_key in home_score and period_key in away_score:
+                score_summary.append(f"{home_score.get(period_key)}-{away_score.get(period_key)}")
+
+        final_score_str = ", ".join(score_summary) if score_summary else "Score not available"
+
+        stats = {}
+        all_stats_period = next((p for p in event_data.get("statistics", []) if p.get("period") == "ALL"), None)
+        if all_stats_period:
+            for group in all_stats_period.get("groups", []):
+                for item in group.get("statisticsItems", []):
+                    key = item.get("key")
+                    if key in ["aces", "doubleFaults", "breakPointsSaved", "breakPointsConverted"]:
+                        stats[key] = {
+                            "home": item.get("home"),
+                            "away": item.get("away")
+                        }
+
         return {
-            "error": f"API request failed with status {http_err.response.status_code}. Response: {http_err.response.text}"}
-    except requests.exceptions.RequestException as req_err:
-        logger.error(f"Request error for {url}: {req_err}", exc_info=True)
-        return {"error": "Could not connect to the Tennis API."}
-    except ValueError:
-        logger.error(f"Failed to decode JSON from {url}", exc_info=True)
-        return {"error": "Received invalid data from the Tennis API."}
+            "tournament": event_data.get("tournament"),
+            "home_player": event_data.get("home_player"),
+            "away_player": event_data.get("away_player"),
+            "status": event_data.get("status"),
+            "winner": winner_name,
+            "final_score": final_score_str,
+            "simplified_statistics": stats if stats else "No detailed statistics available."
+        }
+    except Exception as e:
+        logger.error(f"Error simplifying match data: {e}", exc_info=True)
+        return {"error": "Failed to parse and simplify match data."}
 
 
-def find_match_and_get_details(player1_name: str, date: str, player2_name: Optional[str] = None) -> Dict[str, Any]:
-    """
-    The definitive tool for getting details about a specific match.
-    It finds a match by player(s) and date, then automatically fetches all available stats.
-    """
+async def find_match_and_get_details(player1_name: str, date: str, player2_name: Optional[str] = None) -> Dict[
+    str, Any]:
     logger.info(f"Universal match search for player1='{player1_name}', player2='{player2_name}', date='{date}'")
 
-    # Step 1: Get all matches for the specified day
-    daily_events_data = get_scheduled_events_by_date(date)
+    daily_events_data = await get_scheduled_events_by_date(date)
     if "error" in daily_events_data:
         return daily_events_data
 
@@ -93,7 +148,6 @@ def find_match_and_get_details(player1_name: str, date: str, player2_name: Optio
     if not events:
         return {"summary": f"I couldn't find any matches at all scheduled for {date}."}
 
-    # Step 2: Find the specific match in the day's schedule
     target_event = None
     p1_lower = player1_name.lower()
     p2_lower = player2_name.lower() if player2_name else None
@@ -101,12 +155,8 @@ def find_match_and_get_details(player1_name: str, date: str, player2_name: Optio
     for event in events:
         home_player = event.get("home_player", "").lower()
         away_player = event.get("away_player", "").lower()
-
-        # Check if players are in this event
         p1_in_match = p1_lower in home_player or p1_lower in away_player
-        p2_in_match = True
-        if p2_lower:
-            p2_in_match = p2_lower in home_player or p2_lower in away_player
+        p2_in_match = not p2_lower or (p2_lower in home_player or p2_lower in away_player)
 
         if p1_in_match and p2_in_match:
             target_event = event
@@ -114,156 +164,75 @@ def find_match_and_get_details(player1_name: str, date: str, player2_name: Optio
             break
 
     if not target_event:
-        search_desc = f"'{player1_name}'"
-        if player2_name:
-            search_desc += f" vs '{player2_name}'"
+        search_desc = f"'{player1_name}'" + (f" vs '{player2_name}'" if player2_name else "")
         logger.warning(f"Could not find a match for {search_desc} in the schedule for {date}.")
-        return {"summary": f"I looked for a match with {search_desc} on {date} but couldn't find one. They may not have played, or the data isn't in my system."}
+        return {"summary": f"I looked for a match with {search_desc} on {date} but couldn't find one."}
 
-    # Step 3: If match is found, get its detailed statistics
     event_id = target_event.get("event_id")
     if not event_id:
-        logger.error(f"Match found but it's missing an event_id: {target_event}")
         return {"error": "Found the match, but could not retrieve its details due to missing data."}
 
     logger.info(f"Found event_id {event_id}, now fetching detailed statistics.")
-    stats_data = get_event_statistics(str(event_id))
+    stats_data = await get_event_statistics(str(event_id))
 
-    if "error" in stats_data:
-        logger.warning(f"Could get match details but failed to get stats for event {event_id}. Returning base info.")
-        # Return the match info we have, even if stats fail
-        return {
-            "summary": "Found match details but could not get the full statistics.",
-            "match_details": target_event
-        }
-
-    # Step 4: Merge the basic event data with the rich statistics
-    logger.info("Successfully fetched stats, merging with event data.")
     target_event.update(stats_data)
+    simplified_data = _simplify_match_data(target_event)
 
     return {
-        "summary": "Successfully found the match and its complete statistics.",
-        "match_details": target_event
+        "summary": "Successfully found and processed match details.",
+        "match_details": simplified_data
     }
 
 
-def debug_api_search(player_name: str) -> Dict[str, Any]:
+async def debug_api_search(player_name: str) -> Dict[str, Any]:
     search_term_quoted = urllib.parse.quote(player_name)
     full_path = f"api/tennis/search/{search_term_quoted}"
     logger.info(f"--- DEBUG SEARCH ---: Making raw request for '{player_name}' to full path '{full_path}'")
-    return _make_request(full_path)
+    return await _make_request_async(full_path)
 
 
-def _find_player_id_by_name(player_name: str) -> Optional[int]:
+async def _find_player_id_by_name(player_name: str) -> Optional[int]:
     logger.info(f"Attempting to find player ID for: '{player_name}'")
 
-    def find_player_in_results(data: Dict[str, Any], name_to_match: str) -> Optional[int]:
-        if "error" in data or not data.get("results"):
-            logger.warning("API returned no results or an error for this search query.")
-            return None
+    async def find_in_results(data: Dict[str, Any], name: str) -> Optional[int]:
+        if "error" in data or not data.get("results"): return None
+        return next((entity.get("id") for result in data.get("results", []) if
+                     (entity := result.get("entity", {})) and result.get("type") == "player" and entity.get("sport",
+                                                                                                            {}).get(
+                         "name") == "Tennis" and all(
+                         part in entity.get("name", "").lower() for part in name.lower().split()) and isinstance(
+                         entity.get("id"), int)), None)
 
-        input_name_parts = name_to_match.lower().split()
+    search_data = await _make_request_async(f"api/tennis/search/{urllib.parse.quote(player_name)}")
+    player_id = await find_in_results(search_data, player_name)
+    if player_id: return player_id
 
-        for result in data.get("results", []):
-            entity = result.get("entity", {})
-            if result.get("type") == "player" and entity.get("sport", {}).get("name") == "Tennis":
-                api_name = entity.get("name", "").lower()
-
-                if all(part in api_name for part in input_name_parts):
-                    player_id = entity.get("id")
-                    if isinstance(player_id, int):
-                        logger.info(
-                            f"SUCCESS: Found player ID {player_id} for '{name_to_match}' (API name: '{api_name}')"
-                        )
-                        return player_id
-
-        logger.warning(f"Could not find a matching player for '{name_to_match}' in the provided API results.")
-        return None
-
-    logger.info(f"Strategy 1: Searching API with full name '{player_name}'")
-    full_name_quoted = urllib.parse.quote(player_name)
-    search_data = _make_request(f"api/tennis/search/{full_name_quoted}")
-    player_id = find_player_in_results(search_data, player_name)
-    if player_id:
-        return player_id
-
-    name_parts = player_name.split()
-    if len(name_parts) > 1:
-        last_name = name_parts[-1]
-        logger.info(f"Strategy 1 failed. Strategy 2: Searching API with last name only: '{last_name}'")
-        last_name_quoted = urllib.parse.quote(last_name)
-        search_data = _make_request(f"api/tennis/search/{last_name_quoted}")
-
-        player_id = find_player_in_results(search_data, player_name)
-        if player_id:
-            return player_id
+    if len(player_name.split()) > 1:
+        last_name = player_name.split()[-1]
+        search_data = await _make_request_async(f"api/tennis/search/{urllib.parse.quote(last_name)}")
+        player_id = await find_in_results(search_data, player_name)
+        if player_id: return player_id
 
     logger.error(f"All search strategies failed for '{player_name}'.")
     return None
 
 
-def _get_past_months(num_months: int) -> List[Tuple[int, int]]:
-    months = []
-    today = datetime.date.today()
-    for i in range(num_months):
-        current_month, current_year = today.month - i, today.year
-        while current_month <= 0:
-            current_month += 12
-            current_year -= 1
-        months.append((current_month, current_year))
-    return months
-
-
-def _find_common_event_id_in_calendar(player1_id: int, player2_id: int) -> Optional[int]:
-    logger.info(f"Attempting calendar scan for common event between {player1_id} and {player2_id}.")
-    for month, year in _get_past_months(24):
-        calendar_data = _make_request(f"api/tennis/calendar/{month}/{year}")
-        if "error" in calendar_data or not calendar_data.get("events"):
-            continue
-        for event in calendar_data["events"]:
-            p_ids = {event.get("homeTeam", {}).get("id"), event.get("awayTeam", {}).get("id")}
-            if {player1_id, player2_id}.issubset(p_ids):
-                event_id = event.get("id")
-                logger.info(f"Found common match {event_id} in calendar scan for {month}/{year}.")
-                return event_id
-    logger.warning(f"Calendar scan over {len(_get_past_months(24))} months found no common event for players {player1_id} and {player2_id}.")
-    return None
-
-
-def get_h2h_events(player1_name: str, player2_name: str) -> Dict[str, Any]:
+async def get_h2h_events(player1_name: str, player2_name: str) -> Dict[str, Any]:
     logger.info(f"H2H: Starting lookup for '{player1_name}' vs '{player2_name}'")
-    player1_id = _find_player_id_by_name(player1_name)
-    player2_id = _find_player_id_by_name(player2_name)
+    player1_id, player2_id = await asyncio.gather(
+        _find_player_id_by_name(player1_name),
+        _find_player_id_by_name(player2_name)
+    )
 
     if not all([player1_id, player2_id]):
-        logger.warning(f"Could not find IDs for one or both players. Falling back to web search.")
         return perform_web_search(f"Head to head record between {player1_name} and {player2_name} tennis")
 
-    event_id_for_duel = None
-    logger.info(f"Attempting to find H2H event in {player1_name}'s recent match history.")
-    history_data = _make_request(f"api/tennis/player/{player1_id}/events/previous/0")
+    h2h_data = await _make_request_async(f"api/tennis/player/{player1_id}/h2h/{player2_id}")
+    if "error" in h2h_data or not h2h_data.get("events"):
+        logger.warning(f"Direct H2H lookup failed. Falling back to web search.")
+        return perform_web_search(f"Head to head record between {player1_name} and {player2_name} tennis")
 
-    if "error" not in history_data and history_data.get("events"):
-        for event in history_data["events"]:
-            if player2_id in {event.get("homeTeam", {}).get("id"), event.get("awayTeam", {}).get("id")}:
-                event_id_for_duel = event.get("id")
-                if event_id_for_duel:
-                    logger.info(f"Found common event {event_id_for_duel} in player history.")
-                    break
-
-    if event_id_for_duel:
-        h2h_data = _make_request(f"api/tennis/event/{event_id_for_duel}/duel")
-        if "error" not in h2h_data and h2h_data.get("events"):
-            return _process_h2h_data_and_return(h2h_data, player1_id, player2_id, player1_name, player2_name)
-
-    event_id_for_duel = _find_common_event_id_in_calendar(player1_id, player2_id)
-    if event_id_for_duel:
-        h2h_data = _make_request(f"api/tennis/event/{event_id_for_duel}/duel")
-        if "error" not in h2h_data and h2h_data.get("events"):
-            return _process_h2h_data_and_return(h2h_data, player1_id, player2_id, player1_name, player2_name)
-
-    logger.warning(f"All API H2H attempts failed for {player1_name} vs {player2_name}. Falling back to web search.")
-    return perform_web_search(f"Head to head record between {player1_name} and {player2_name} tennis")
+    return _process_h2h_data_and_return(h2h_data, player1_id, player2_id, player1_name, player2_name)
 
 
 def _process_h2h_data_and_return(h2h_data: Dict[str, Any], player1_id: int, player2_id: int, player1_name: str,
@@ -295,10 +264,50 @@ def _process_h2h_data_and_return(h2h_data: Dict[str, Any], player1_id: int, play
             home_id = match.get("homeTeam", {}).get("id")
             away_id = match.get("awayTeam", {}).get("id")
 
-            if winner_code == 1 and home_id == player1_id: p1_wins += 1
-            elif winner_code == 1 and home_id == player2_id: p2_wins += 1
-            elif winner_code == 2 and away_id == player1_id: p1_wins += 1
-            elif winner_code == 2 and away_id == player2_id: p2_wins += 1
+            if winner_code == 1 and home_id == player1_id:
+                p1_wins += 1
+            elif winner_code == 1 and home_id == player2_id:
+                p2_wins += 1
+            elif winner_code == 2 and away_id == player1_id:
+                p1_wins += 1
+            elif winner_code == 2 and away_id == player2_id:
+                p2_wins += 1
+
+        recent_matches = []
+        MAX_MATCHES_TO_RETURN = 5
+        for match in h2h_events[:MAX_MATCHES_TO_RETURN]:
+            winner_code = match.get("winnerCode")
+            home_team = match.get("homeTeam", {})
+            away_team = match.get("awayTeam", {})
+            home_score = match.get("homeScore", {})
+            away_score = match.get("awayScore", {})
+            tournament = match.get("tournament", {})
+
+            winner_name = "N/A"
+            if winner_code == 1:
+                winner_name = home_team.get("name")
+            elif winner_code == 2:
+                winner_name = away_team.get("name")
+
+            match_date = "N/A"
+            timestamp = match.get("startTimestamp")
+            if timestamp:
+                match_date = datetime.datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')
+
+            score_parts = []
+            for i in range(1, 6):
+                p_key = f"period{i}"
+                if p_key in home_score and p_key in away_score:
+                    score_parts.append(f"{home_score[p_key]}-{away_score[p_key]}")
+
+            final_score_str = ", ".join(score_parts) if score_parts else "Score not available"
+
+            recent_matches.append({
+                "date": match_date,
+                "tournament": tournament.get("name"),
+                "winner": winner_name,
+                "score": final_score_str
+            })
 
         summary_text = ""
         if p1_wins > p2_wins:
@@ -306,66 +315,61 @@ def _process_h2h_data_and_return(h2h_data: Dict[str, Any], player1_id: int, play
         elif p2_wins > p1_wins:
             summary_text = f"{player2_canonical_name} leads {player1_canonical_name} {p2_wins}-{p1_wins} in their head-to-head matches."
         else:
-            summary_text = f"{player1_canonical_name} and {player2_canonical_name} are tied {p1_wins}-{p1_wins} in their head-to-head matches."
+            summary_text = f"The head-to-head record between {player1_canonical_name} and {player2_canonical_name} is tied {p1_wins}-{p1_wins}."
 
         logger.info(f"Successfully processed H2H data: {summary_text}")
-        return {"summary": summary_text,
-                "data": {f"{player1_canonical_name}_wins": p1_wins, f"{player2_canonical_name}_wins": p2_wins}}
+        return {
+            "summary": summary_text,
+            "overall_record": {f"{player1_canonical_name}_wins": p1_wins, f"{player2_canonical_name}_wins": p2_wins},
+            "recent_matches": recent_matches
+        }
     except Exception as e:
-        logger.critical(f"Failed to parse DUEL response: {e}", exc_info=True)
+        logger.critical(f"Failed to parse H2H response: {e}", exc_info=True)
         return perform_web_search(f"Head to head record between {player1_name} and {player2_name} tennis")
 
 
-def get_scheduled_events_by_date(date: str) -> Dict[str, Any]:
+async def get_scheduled_events_by_date(date: str) -> Dict[str, Any]:
     try:
-        date_str_lower = date.lower()
-        if date_str_lower == 'today':
-            target_date = datetime.date.today()
-        elif date_str_lower == 'tomorrow':
-            target_date = datetime.date.today() + datetime.timedelta(days=1)
-        elif date_str_lower == 'yesterday':
-            target_date = datetime.date.today() - datetime.timedelta(days=1)
+        date_map = {'today': 0, 'tomorrow': 1, 'yesterday': -1}
+        delta = date_map.get(date.lower())
+        if delta is not None:
+            target_date = datetime.date.today() + datetime.timedelta(days=delta)
         else:
             target_date = datetime.datetime.strptime(date, "%Y-%m-%d").date()
-
         api_date_str = f"{target_date.day}/{target_date.month}/{target_date.year}"
-        return _process_event_list(_make_request(f"api/tennis/events/{api_date_str}"))
+        return _process_event_list(await _make_request_async(f"api/tennis/events/{api_date_str}"))
     except ValueError:
         return {"error": "Invalid date format. Please use 'today', 'tomorrow', 'yesterday', or YYYY-MM-DD."}
 
 
-def get_live_events() -> Dict[str, Any]:
-    return _process_event_list(_make_request("api/tennis/events/live"))
+async def get_live_events() -> Dict[str, Any]:
+    return _process_event_list(await _make_request_async("api/tennis/events/live"))
 
 
-def get_odds_by_date(date: str) -> Dict[str, Any]:
+async def get_odds_by_date(date: str) -> Dict[str, Any]:
     try:
-        date_str_lower = date.lower()
-        if date_str_lower == 'today':
-            target_date = datetime.date.today()
-        elif date_str_lower == 'tomorrow':
-            target_date = datetime.date.today() + datetime.timedelta(days=1)
-        elif date_str_lower == 'yesterday':
-            target_date = datetime.date.today() - datetime.timedelta(days=1)
+        date_map = {'today': 0, 'tomorrow': 1, 'yesterday': -1}
+        delta = date_map.get(date.lower())
+        if delta is not None:
+            target_date = datetime.date.today() + datetime.timedelta(days=delta)
         else:
             target_date = datetime.datetime.strptime(date, "%Y-%m-%d").date()
-
         api_date_str = f"{target_date.day}/{target_date.month}/{target_date.year}"
-        return _process_event_list(_make_request(f"api/tennis/events/odds/{api_date_str}"))
+        return _process_event_list(await _make_request_async(f"api/tennis/events/odds/{api_date_str}"))
     except ValueError:
         return {"error": "Invalid date format. Use 'today', 'tomorrow', 'yesterday', or YYYY-MM-DD."}
 
 
-def get_event_statistics(event_id: str) -> Dict[str, Any]:
-    return _make_request(f"api/tennis/event/{event_id}/statistics")
+async def get_event_statistics(event_id: str) -> Dict[str, Any]:
+    return await _make_request_async(f"api/tennis/event/{event_id}/statistics")
 
 
-def get_player_performance(player_id: str) -> Dict[str, Any]:
-    return _process_event_list(_make_request(f"api/tennis/player/{player_id}/events/previous/0"))
+async def get_player_performance(player_id: str) -> Dict[str, Any]:
+    return _process_event_list(await _make_request_async(f"api/tennis/player/{player_id}/events/previous/0"))
 
 
-def get_rankings(ranking_type: str) -> Dict[str, Any]:
+async def get_rankings(ranking_type: str) -> Dict[str, Any]:
     ranking_type = ranking_type.lower()
     if ranking_type not in ["atp", "wta"]:
         return {"error": "Invalid ranking_type. Must be 'atp' or 'wta'."}
-    return _make_request(f"api/tennis/rankings/{ranking_type}/live")
+    return await _make_request_async(f"api/tennis/rankings/{ranking_type}/live")

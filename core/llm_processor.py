@@ -7,6 +7,7 @@ manages the tool-calling loop, executes the appropriate tool function
 """
 
 import logging
+import inspect
 from typing import List, Dict, Any
 
 import google.generativeai as genai
@@ -26,7 +27,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to configure Google Generative AI client: {e}")
     raise
 
-MODEL_NAME = "models/gemini-1.5-flash-latest"
+MODEL_NAME = "models/gemini-2.5-flash"
 
 SYSTEM_INSTRUCTION = "You are a helpful and direct tennis assistant. When you have the answer from a tool, respond with only the answer, concisely and directly. Do not mention your tools, the API, or that you performed a web search. For example, instead of 'Based on my search, Player A won', your entire response should be just 'Player A won'."
 
@@ -69,7 +70,6 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
             logger.info(f"Turn {turn_num + 1}: Sending prompt to Gemini. Prompt type: {type(prompt).__name__}")
             response = await chat.send_message_async(prompt)
 
-            # --- NEW, CORRECTED SAFETY NET LOGIC ---
             is_clarification_question = (
                     turn_num == 0
                     and not response.parts[0].function_call
@@ -78,22 +78,15 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
 
             if is_clarification_question:
                 logger.warning("LLM asked for clarification. Forcing a web search to provide context.")
-
-                tool_output = perform_web_search(request.query)
+                tool_output = perform_web_search(request.query) # This remains synchronous
                 used_sources.append("web_search_client: perform_web_search")
-
-                web_context = tool_output.get('context') or tool_output.get('summary') or "No information found."
-
-                # Construct a new, better prompt with the context we found.
+                web_context = tool_output.get('context') or "No information found."
                 new_prompt = (
                     f"Context from a web search: {web_context}\n\n"
                     f"Based ONLY on the context above, please answer my original question: '{request.query}'"
                 )
-
-                # Send this new prompt to the model immediately to get a new response
                 logger.info("Sending new enriched prompt to Gemini after forced web search.")
                 response = await chat.send_message_async(new_prompt)
-            # --- END OF SAFETY NET LOGIC ---
 
             try:
                 final_text = response.text
@@ -122,13 +115,15 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
                 else:
                     tool_function = TOOL_REGISTRY[function_name]
                     try:
-                        tool_output = tool_function(**args)
+                        # --- ASYNC TOOL HANDLING ---
+                        if inspect.iscoroutinefunction(tool_function):
+                            tool_output = await tool_function(**args)
+                        else:
+                            tool_output = tool_function(**args)
+                        # --- END ASYNC TOOL HANDLING ---
+
                         module_name = tool_function.__module__.split('.')[-1]
                         source_name = f"{module_name}: {function_name}"
-
-                        if isinstance(tool_output, dict) and tool_output.get("source") == "Self-Hosted Web Scraper":
-                            source_name = "web_search_client: perform_web_search"
-
                         if source_name not in used_sources:
                             used_sources.append(source_name)
 
@@ -137,7 +132,6 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
                         tool_output = {"error": f"Execution failed for tool '{function_name}': {str(e)}"}
 
                 logger.info(f"Tool '{function_name}' returned: {tool_output}")
-
                 tool_responses.append(
                     genai.protos.Part(
                         function_response=genai.protos.FunctionResponse(
@@ -148,16 +142,13 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
                 )
 
             if not tool_responses:
-                logger.error("Response was identified as a tool call, but no function calls were processed or valid.")
+                logger.error("Response was identified as a tool call, but no valid function calls were processed.")
                 return ChatResponse(response="I tried to use a tool, but something went wrong. Please try again.")
 
             prompt = tool_responses
 
         logger.warning(f"Exceeded max tool-calling turns ({max_turns}).")
-        return ChatResponse(
-            response="I'm having trouble using my tools to find an answer. Please try rephrasing your question.",
-            sources=used_sources if used_sources else None,
-        )
+        return ChatResponse(response="I'm having trouble finding an answer. Please try rephrasing your question.")
     except Exception as e:
         logger.critical(f"An unhandled exception occurred in process_chat_request: {e}", exc_info=True)
         return ChatResponse(response="I'm sorry, a critical error occurred and I can't process your request right now.")
