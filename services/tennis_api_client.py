@@ -30,6 +30,11 @@ def _process_event_list(raw_data: Dict[str, Any]) -> Dict[str, Any]:
             home_team_info = event.get("homeTeam", {})
             away_team_info = event.get("awayTeam", {})
             status_info = event.get("status", {})
+
+            # --- THIS IS THE FIX: Keep the score information! ---
+            home_score_info = event.get("homeScore", {})
+            away_score_info = event.get("awayScore", {})
+
             simplified_event = {
                 "tournament": tournament_info.get("name"),
                 "category": (tournament_info.get("category") or {}).get("name"),
@@ -37,6 +42,8 @@ def _process_event_list(raw_data: Dict[str, Any]) -> Dict[str, Any]:
                 "away_player": away_team_info.get("name"),
                 "status": status_info.get("description", "Scheduled"),
                 "event_id": event.get("id"),
+                "home_score": home_score_info,
+                "away_score": away_score_info,
             }
             simplified_events.append(simplified_event)
         return {
@@ -197,7 +204,6 @@ def _find_common_event_id_in_calendar(player1_id: int, player2_id: int) -> Optio
 
 def get_h2h_events(player1_name: str, player2_name: str) -> Dict[str, Any]:
     logger.info(f"H2H: Starting lookup for '{player1_name}' vs '{player2_name}'")
-    # --- THIS IS THE FIX ---
     player1_id = _find_player_id_by_name(player1_name)
     player2_id = _find_player_id_by_name(player2_name)
 
