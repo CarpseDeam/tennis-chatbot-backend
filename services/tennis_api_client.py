@@ -77,45 +77,74 @@ def _make_request(full_url_path: str) -> Dict[str, Any]:
         return {"error": "Received invalid data from the Tennis API."}
 
 
-def get_player_match_result_by_date(player_name: str, date: str) -> Dict[str, Any]:
+def find_match_and_get_details(player1_name: str, date: str, player2_name: Optional[str] = None) -> Dict[str, Any]:
     """
-    A high-level function to find a single player's match and its stats on a specific day.
+    The definitive tool for getting details about a specific match.
+    It finds a match by player(s) and date, then automatically fetches all available stats.
     """
-    logger.info(f"Searching for match result and stats for '{player_name}' on date '{date}'")
+    logger.info(f"Universal match search for player1='{player1_name}', player2='{player2_name}', date='{date}'")
 
+    # Step 1: Get all matches for the specified day
     daily_events_data = get_scheduled_events_by_date(date)
-    logger.info(f"Received from API for date '{date}': {daily_events_data}")
-
     if "error" in daily_events_data:
         return daily_events_data
 
     events = daily_events_data.get("events_preview", [])
     if not events:
-        return {"summary": f"I couldn't find any matches scheduled for {date}."}
+        return {"summary": f"I couldn't find any matches at all scheduled for {date}."}
+
+    # Step 2: Find the specific match in the day's schedule
+    target_event = None
+    p1_lower = player1_name.lower()
+    p2_lower = player2_name.lower() if player2_name else None
 
     for event in events:
         home_player = event.get("home_player", "").lower()
         away_player = event.get("away_player", "").lower()
 
-        if player_name.lower() in home_player or player_name.lower() in away_player:
-            logger.info(f"Found match for '{player_name}': {event}")
+        # Check if players are in this event
+        p1_in_match = p1_lower in home_player or p1_lower in away_player
+        p2_in_match = True
+        if p2_lower:
+            p2_in_match = p2_lower in home_player or p2_lower in away_player
 
-            event_id = event.get("event_id")
-            if event_id:
-                logger.info(f"Found event_id {event_id}, now fetching detailed statistics.")
-                stats_data = get_event_statistics(str(event_id))
+        if p1_in_match and p2_in_match:
+            target_event = event
+            logger.info(f"Found target match: {target_event}")
+            break
 
-                if "error" not in stats_data:
-                    logger.info("Successfully fetched stats, merging with event data.")
-                    event.update(stats_data)
+    if not target_event:
+        search_desc = f"'{player1_name}'"
+        if player2_name:
+            search_desc += f" vs '{player2_name}'"
+        logger.warning(f"Could not find a match for {search_desc} in the schedule for {date}.")
+        return {"summary": f"I looked for a match with {search_desc} on {date} but couldn't find one. They may not have played, or the data isn't in my system."}
 
-            return {
-                "summary": f"Found a match and its statistics for {player_name}.",
-                "match_details": event
-            }
+    # Step 3: If match is found, get its detailed statistics
+    event_id = target_event.get("event_id")
+    if not event_id:
+        logger.error(f"Match found but it's missing an event_id: {target_event}")
+        return {"error": "Found the match, but could not retrieve its details due to missing data."}
 
-    logger.warning(f"Could not find a match for '{player_name}' in the schedule for {date}.")
-    return {"summary": f"I couldn't find a match for {player_name} on {date}. It's possible they did not play, or the information isn't available in my database."}
+    logger.info(f"Found event_id {event_id}, now fetching detailed statistics.")
+    stats_data = get_event_statistics(str(event_id))
+
+    if "error" in stats_data:
+        logger.warning(f"Could get match details but failed to get stats for event {event_id}. Returning base info.")
+        # Return the match info we have, even if stats fail
+        return {
+            "summary": "Found match details but could not get the full statistics.",
+            "match_details": target_event
+        }
+
+    # Step 4: Merge the basic event data with the rich statistics
+    logger.info("Successfully fetched stats, merging with event data.")
+    target_event.update(stats_data)
+
+    return {
+        "summary": "Successfully found the match and its complete statistics.",
+        "match_details": target_event
+    }
 
 
 def debug_api_search(player_name: str) -> Dict[str, Any]:
@@ -203,7 +232,6 @@ def _find_common_event_id_in_calendar(player1_id: int, player2_id: int) -> Optio
 
 def get_h2h_events(player1_name: str, player2_name: str) -> Dict[str, Any]:
     logger.info(f"H2H: Starting lookup for '{player1_name}' vs '{player2_name}'")
-    # --- TYPO IS NOW FIXED ---
     player1_id = _find_player_id_by_name(player1_name)
     player2_id = _find_player_id_by_name(player2_name)
 
