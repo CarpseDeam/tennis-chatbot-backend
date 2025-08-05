@@ -25,8 +25,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to configure Google Generative AI client: {e}")
     raise
 
-# RESTORED to your original model choice.
-MODEL_NAME = "models/gemini-2.5-flash"
+MODEL_NAME = "models/gemini-1.5-flash-latest"
 model = genai.GenerativeModel(
     model_name=MODEL_NAME,
     tools=GEMINI_TOOLS,
@@ -95,25 +94,28 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
                         tool_output = tool_function(**args)
                         module_name = tool_function.__module__.split('.')[-1]
                         source_name = f"{module_name}: {function_name}"
+
+                        # If the tool resulted in a web search, reflect that in the source
+                        if isinstance(tool_output, dict) and tool_output.get("source") == "Self-Hosted Web Scraper":
+                            source_name = "web_search_client: perform_web_search"
+
                         if source_name not in used_sources:
                             used_sources.append(source_name)
+
                     except Exception as e:
                         logger.error(f"Error executing tool '{function_name}': {e}", exc_info=True)
-                        tool_output = { "error": f"Execution failed for tool '{function_name}': {str(e)}" }
+                        tool_output = {"error": f"Execution failed for tool '{function_name}': {str(e)}"}
 
                 logger.info(f"Tool '{function_name}' returned: {tool_output}")
 
-                # If the tool explicitly returned a web search result, return it directly.
-                if isinstance(tool_output, dict) and tool_output.get("source") == "Fallback Web Search":
-                    logger.info("Detected fallback web search result. Bypassing further LLM processing.")
-                    return ChatResponse(
-                        response=tool_output.get("summary", "I performed a search, but the summary is unavailable."),
-                        sources=["Web Search Fallback"]
+                tool_responses.append(
+                    genai.protos.Part(
+                        function_response=genai.protos.FunctionResponse(
+                            name=function_name,
+                            response=tool_output
+                        )
                     )
-
-                tool_responses.append({
-                    "function_response": { "name": function_name, "response": tool_output }
-                })
+                )
 
             if not tool_responses:
                 logger.error("Response was identified as a tool call, but no function calls were processed or valid.")
