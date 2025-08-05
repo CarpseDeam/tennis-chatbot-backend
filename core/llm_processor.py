@@ -14,6 +14,7 @@ import google.generativeai as genai
 from config import settings
 from schemas.chat_schemas import ChatRequest, ChatResponse, ChatMessage
 from core.tool_definitions import GEMINI_TOOLS, TOOL_REGISTRY
+from services.web_search_client import perform_web_search
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,36 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
             logger.info(f"Turn {turn_num + 1}: Sending prompt to Gemini. Prompt type: {type(prompt).__name__}")
             response = await chat.send_message_async(prompt)
 
+            # --- NEW SAFETY NET LOGIC ---
+            # Check if the model is asking a question without using a tool on the first turn
+            is_clarification_question = (
+                    turn_num == 0
+                    and not response.parts[0].function_call
+                    and not used_sources
+            )
+
+            if is_clarification_question:
+                logger.warning("LLM asked for clarification instead of using a tool. Forcing a web search.")
+
+                # Manually perform a web search with the original query
+                tool_output = perform_web_search(request.query)
+                source_name = "web_search_client: perform_web_search"
+                if source_name not in used_sources:
+                    used_sources.append(source_name)
+
+                logger.info(f"Forced web search returned: {tool_output}")
+
+                # Create the tool response part to send back to the LLM
+                prompt = [genai.protos.Part(
+                    function_response=genai.protos.FunctionResponse(
+                        name="perform_web_search",
+                        response=tool_output
+                    )
+                )]
+                # Skip to the next turn to send this new info to the LLM
+                continue
+            # --- END OF SAFETY NET LOGIC ---
+
             try:
                 final_text = response.text
                 logger.info(f"LLM provided a final text response on turn {turn_num + 1}. Exiting loop.")
@@ -95,7 +126,6 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
                         module_name = tool_function.__module__.split('.')[-1]
                         source_name = f"{module_name}: {function_name}"
 
-                        # If the tool resulted in a web search, reflect that in the source
                         if isinstance(tool_output, dict) and tool_output.get("source") == "Self-Hosted Web Scraper":
                             source_name = "web_search_client: perform_web_search"
 
