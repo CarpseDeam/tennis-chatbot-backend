@@ -228,18 +228,27 @@ async def debug_api_search(player_name: str) -> Dict[str, Any]:
 
 
 async def _find_player_id_by_name(player_name: str) -> Optional[int]:
-    """Finds a player's ID using a multi-strategy search."""
-    logger.info(f"Attempting to find player ID for: '{player_name}'")
+    """
+    Finds a player's ID using a robust, scoring-based, multi-strategy search
+    to handle variations in API data and prevent false positives/negatives.
+    """
+    logger.info(f"Attempting to find player ID for: '{player_name}' with new scoring logic.")
 
-    original_name_parts = player_name.lower().split()
+    # Clean and split the user's query into parts for scoring
+    query_parts = set(player_name.lower().replace('.', '').split())
+    if not query_parts:
+        return None
 
-    search_terms = [player_name]
-    if len(original_name_parts) > 1:
-        search_terms.append(original_name_parts[-1])
-        search_terms.append(original_name_parts[0])
+    # Use the last name as the primary search term, then the full name as a fallback.
+    # This is more reliable as last names are less frequently abbreviated.
+    search_terms = [player_name.split()[-1], player_name]
+
+    best_match = None
+    highest_score = 0
+    is_ambiguous = False
 
     for term in set(search_terms):
-        logger.info(f"Search Strategy: Trying term '{term}'")
+        logger.info(f"Search Strategy: Trying search term '{term}'")
         search_data = await _make_request_async(f"api/tennis/search/{urllib.parse.quote(term)}")
 
         if "error" in search_data or not search_data.get("results"):
@@ -251,13 +260,33 @@ async def _find_player_id_by_name(player_name: str) -> Optional[int]:
                 continue
 
             api_name = entity.get("name", "").lower()
-            if all(part in api_name for part in original_name_parts):
-                player_id = entity.get("id")
-                if isinstance(player_id, int):
-                    logger.info(f"SUCCESS: Found ID {player_id} for '{player_name}' (via term '{term}', API name '{api_name}')")
-                    return player_id
 
-    logger.error(f"All search strategies failed for '{player_name}'.")
+            # --- Scoring Logic ---
+            current_score = 0
+            for part in query_parts:
+                if part in api_name:
+                    current_score += 1
+
+            # --- Match Evaluation ---
+            if current_score > highest_score:
+                highest_score = current_score
+                best_match = entity
+                is_ambiguous = False  # We found a new, better match
+            elif current_score == highest_score and highest_score > 0:
+                # This detects a tie, meaning the result is ambiguous
+                is_ambiguous = True
+
+    # --- Final Decision ---
+    # A confident match requires a "perfect score" (all parts of the query were found)
+    # and must not be ambiguous (no other results tied for the same high score).
+    if best_match and highest_score == len(query_parts) and not is_ambiguous:
+        player_id = best_match.get("id")
+        if isinstance(player_id, int):
+            api_name_found = best_match.get('name')
+            logger.info(f"SUCCESS: Found confident ID {player_id} for '{player_name}' (API name '{api_name_found}')")
+            return player_id
+
+    logger.warning(f"Could not find a confident, unambiguous match for '{player_name}'. Best score was {highest_score}. Ambiguity detected: {is_ambiguous}.")
     return None
 
 
