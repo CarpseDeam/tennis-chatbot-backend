@@ -230,12 +230,14 @@ async def debug_api_search(player_name: str) -> Dict[str, Any]:
 
 async def _find_player_id_by_name(player_name: str) -> Optional[int]:
     """
-    Finds a player's ID using a highly robust, multi-strategy search.
-    It prioritizes perfect matches and handles API name variations gracefully.
+    Finds a player's ID using a truly robust, multi-strategy search.
+    This version is designed to handle name variations and API inconsistencies
+    like reversed names and initials, and only returns a result if it is unambiguous.
     """
-    logger.info(f"Executing rock-solid player search for '{player_name}'.")
+    logger.info(f"Executing FINAL, truly robust player search for '{player_name}'.")
 
-    query_parts = set(player_name.lower().replace('.', '').split())
+    # Clean the query and handle empty strings
+    query_parts = set(p for p in player_name.lower().replace('.', '').split() if p)
     if not query_parts:
         return None
 
@@ -263,30 +265,42 @@ async def _find_player_id_by_name(player_name: str) -> Optional[int]:
                 continue
 
             api_name = entity.get("name", "").lower()
-            api_name_parts = set(api_name.replace(',', '').replace('.', '').split())
+            api_name_parts = set(p for p in api_name.replace(',', '').replace('.', '').split() if p)
 
-            # A match is valid if all parts of the user's query are a subset of the API result name's parts.
-            # This handles "Ben Shelton" matching "Shelton, Ben" perfectly.
-            if query_parts.issubset(api_name_parts):
+            # --- DYNAMIC AND ROBUST MATCHING LOGIC ---
+            all_parts_matched = True
+            for q_part in query_parts:
+                part_found = False
+                for a_part in api_name_parts:
+                    if (q_part == a_part or
+                            (len(a_part) == 1 and q_part.startswith(a_part)) or
+                            (len(q_part) == 1 and a_part.startswith(q_part))):
+                        part_found = True
+                        break
+
+                if not part_found:
+                    all_parts_matched = False
+                    break
+
+            if all_parts_matched:
                 potential_matches.append(entity)
 
     if not potential_matches:
-        logger.warning(f"No potential matches found for '{player_name}'.")
+        logger.warning(f"Robust search found NO potential matches for '{player_name}'.")
         return None
 
-    # De-duplicate the results based on the unique player ID.
+    # De-duplicate results using the unique player ID.
     unique_matches = {match['id']: match for match in potential_matches}.values()
 
     if len(unique_matches) == 1:
         match = list(unique_matches)[0]
         player_id = match.get("id")
         logger.info(
-            f"SUCCESS: Found ONE unique, confident match for '{player_name}'. ID: {player_id}, Name: {match.get('name')}")
+            f"SUCCESS: Robust search found ONE unique, confident match for '{player_name}'. ID: {player_id}, Name: {match.get('name')}")
         return player_id
     else:
-        # If we find more than one unique player, it's ambiguous.
         logger.warning(
-            f"Found {len(unique_matches)} AMBIGUOUS matches for '{player_name}'. Cannot proceed confidently.")
+            f"Robust search found {len(unique_matches)} AMBIGUOUS matches for '{player_name}'. Cannot proceed confidently.")
         for match in unique_matches:
             logger.warning(f"  - Ambiguous match found: ID {match.get('id')}, Name: {match.get('name')}")
         return None
