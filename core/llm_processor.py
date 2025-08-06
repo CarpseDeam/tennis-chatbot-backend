@@ -29,15 +29,22 @@ except Exception as e:
 
 MODEL_NAME = "models/gemini-2.5-flash"
 
-# NEW, BALANCED PERSONA: Friendly and enthusiastic, but still direct.
-SYSTEM_INSTRUCTION = "You are a friendly, enthusiastic, and helpful tennis assistant. Your tone should be that of a passionate tennis expert who loves sharing stats and fun facts. When you get information from your tools, answer the user's question directly and concisely. Never mention the tools, the API, or that you performed a search—that's our little secret!"
+# --- DYNAMIC AND ROBUST SYSTEM PROMPT ---
+# This prompt gives the model clearer instructions on how to act smart.
+SYSTEM_INSTRUCTION = """You are a friendly, enthusiastic, and helpful tennis assistant. Your tone should be that of a passionate tennis expert who loves sharing stats and fun facts.
+
+Your primary goal is to provide direct, accurate answers. Follow these rules:
+1.  **NEVER mention your tools.** Do not say "I used a tool" or "I performed a search." Act like you know the information yourself. This is our little secret.
+2.  **Prioritize Clarity.** If a tool gives you a list of matches (clarification options), present these options clearly to the user so they can choose.
+3.  **Be a Smart Problem-Solver.** If a primary tool fails, you will receive an error message and supplemental information from a web search. Use the web search information to answer the user's original question to the best of your ability.
+"""
 
 model = genai.GenerativeModel(
     model_name=MODEL_NAME,
     tools=GEMINI_TOOLS,
     system_instruction=SYSTEM_INSTRUCTION,
 )
-logger.info(f"Generative model '{MODEL_NAME}' initialized with a new friendly and enthusiastic persona!")
+logger.info(f"Generative model '{MODEL_NAME}' initialized with a new DYNAMIC and ROBUST persona!")
 
 
 def _convert_history_to_gemini_format(
@@ -71,24 +78,6 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
             logger.info(f"Turn {turn_num + 1}: Sending prompt to Gemini. Prompt type: {type(prompt).__name__}")
             response = await chat.send_message_async(prompt)
 
-            is_clarification_question = (
-                    turn_num == 0
-                    and not response.parts[0].function_call
-                    and not used_sources
-            )
-
-            if is_clarification_question:
-                logger.warning("LLM asked for clarification. Forcing a web search to provide context.")
-                tool_output = perform_web_search(request.query) # This remains synchronous
-                used_sources.append("web_search_client: perform_web_search")
-                web_context = tool_output.get('context') or "No information found."
-                new_prompt = (
-                    f"Context from a web search: {web_context}\n\n"
-                    f"Based ONLY on the context above, please answer my original question: '{request.query}'"
-                )
-                logger.info("Sending new enriched prompt to Gemini after forced web search.")
-                response = await chat.send_message_async(new_prompt)
-
             try:
                 final_text = response.text
                 logger.info(f"LLM provided a final text response on turn {turn_num + 1}. Exiting loop.")
@@ -108,6 +97,7 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
                 call = part.function_call
                 function_name = call.name
                 args = dict(call.args)
+                tool_output = None
                 logger.info(f"Attempting to execute tool: {function_name} with args: {args}")
 
                 if function_name not in TOOL_REGISTRY:
@@ -116,20 +106,34 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
                 else:
                     tool_function = TOOL_REGISTRY[function_name]
                     try:
-                        # --- ASYNC TOOL HANDLING ---
                         if inspect.iscoroutinefunction(tool_function):
                             tool_output = await tool_function(**args)
                         else:
                             tool_output = tool_function(**args)
-                        # --- END ASYNC TOOL HANDLING ---
 
                         module_name = tool_function.__module__.split('.')[-1]
                         source_name = f"{module_name}: {function_name}"
                         if source_name not in used_sources:
                             used_sources.append(source_name)
 
+                        # --- ROBUSTNESS: SMART FALLBACK ON TOOL FAILURE ---
+                        is_primary_tool_failure = "error" in tool_output and function_name != "perform_web_search"
+                        if is_primary_tool_failure:
+                            logger.warning(f"Primary tool '{function_name}' failed. Triggering web search fallback.")
+                            # Use the original user query for the web search
+                            web_search_results = await perform_web_search(request.query)
+                            used_sources.append("web_search_client: perform_web_search")
+
+                            # Create a rich context for the LLM
+                            fallback_context = {
+                                "original_tool_error": tool_output,
+                                "web_search_context": web_search_results.get("context", "No information found from web search.")
+                            }
+                            tool_output = fallback_context
+                            logger.info("Created fallback context with web search data for the LLM.")
+
                     except Exception as e:
-                        logger.error(f"Error executing tool '{function_name}': {e}", exc_info=True)
+                        logger.error(f"Critical error executing tool '{function_name}': {e}", exc_info=True)
                         tool_output = {"error": f"Execution failed for tool '{function_name}': {str(e)}"}
 
                 logger.info(f"Tool '{function_name}' returned: {tool_output}")

@@ -2,7 +2,7 @@
 
 import logging
 from typing import Dict, Any
-import requests
+import httpx
 from bs4 import BeautifulSoup
 import urllib.parse
 
@@ -14,21 +14,22 @@ HEADERS = {
 }
 
 
-def perform_web_search(query: str) -> Dict[str, Any]:
+async def perform_web_search(query: str) -> Dict[str, Any]:
     """
     Performs a REAL, live web search by scraping DuckDuckGo results.
-    This function is self-contained and requires no external API keys.
+    This function is self-contained, asynchronous, and requires no external API keys.
     """
-    logger.info(f"Performing self-hosted web scrape for query: '{query}'")
+    logger.info(f"Performing async web scrape for query: '{query}'")
 
     # URL-encode the query to handle spaces and special characters
     encoded_query = urllib.parse.quote_plus(query)
     search_url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
 
     try:
-        # Make the HTTP request to get the page content
-        response = requests.get(search_url, headers=HEADERS, timeout=10)
-        response.raise_for_status()  # Will raise an error for bad status codes
+        # Use httpx.AsyncClient for non-blocking I/O
+        async with httpx.AsyncClient() as client:
+            response = await client.get(search_url, headers=HEADERS, timeout=10)
+            response.raise_for_status()  # Will raise an error for bad status codes
 
         # Parse the HTML content using BeautifulSoup
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -47,7 +48,7 @@ def perform_web_search(query: str) -> Dict[str, Any]:
 
         if not context_snippets:
             logger.warning(f"Web scrape for '{query}' yielded no results.")
-            return {"summary": "I searched the web but couldn't find any relevant information."}
+            return {"summary": "I searched but couldn't find any relevant information."}
 
         # Join the snippets into a single context string
         full_context = "\n".join(f"- {s}" for s in context_snippets)
@@ -60,7 +61,7 @@ def perform_web_search(query: str) -> Dict[str, Any]:
             "source": "Self-Hosted Web Scraper"
         }
 
-    except requests.exceptions.RequestException as e:
+    except httpx.RequestError as e:
         logger.error(f"Network error during web scrape: {e}", exc_info=True)
         return {"error": f"Failed to connect to search engine: {str(e)}"}
     except Exception as e:
