@@ -134,7 +134,8 @@ def _simplify_match_data(event_data: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": "Failed to parse and simplify match data."}
 
 
-async def _find_and_process_specific_match(events: List[Dict], player1_name: str, player2_name: Optional[str]) -> Optional[Dict]:
+async def _find_and_process_specific_match(events: List[Dict], player1_name: str, player2_name: Optional[str]) -> \
+Optional[Dict]:
     """Internal helper to find a specific match in a list of events and get its stats."""
     target_event = None
     p1_lower = player1_name.lower()
@@ -229,65 +230,66 @@ async def debug_api_search(player_name: str) -> Dict[str, Any]:
 
 async def _find_player_id_by_name(player_name: str) -> Optional[int]:
     """
-    Finds a player's ID using a robust, scoring-based, multi-strategy search
-    to handle variations in API data and prevent false positives/negatives.
+    Finds a player's ID using a highly robust, multi-strategy search.
+    It prioritizes perfect matches and handles API name variations gracefully.
     """
-    logger.info(f"Attempting to find player ID for: '{player_name}' with new scoring logic.")
+    logger.info(f"Executing rock-solid player search for '{player_name}'.")
 
-    # Clean and split the user's query into parts for scoring
     query_parts = set(player_name.lower().replace('.', '').split())
     if not query_parts:
         return None
 
-    # Use the last name as the primary search term, then the full name as a fallback.
-    # This is more reliable as last names are less frequently abbreviated.
-    search_terms = [player_name.split()[-1], player_name]
+    # Search by full name, then by last name as a fallback.
+    search_terms = [player_name]
+    if len(player_name.split()) > 1:
+        search_terms.append(player_name.split()[-1])
 
-    best_match = None
-    highest_score = 0
-    is_ambiguous = False
+    potential_matches = []
 
-    for term in set(search_terms):
-        logger.info(f"Search Strategy: Trying search term '{term}'")
-        search_data = await _make_request_async(f"api/tennis/search/{urllib.parse.quote(term)}")
+    # Use asyncio.gather to run searches concurrently for speed.
+    search_tasks = [
+        _make_request_async(f"api/tennis/search/{urllib.parse.quote(term)}")
+        for term in set(search_terms)
+    ]
+    api_results = await asyncio.gather(*search_tasks)
 
+    for search_data in api_results:
         if "error" in search_data or not search_data.get("results"):
             continue
 
         for result in search_data.get("results", []):
             entity = result.get("entity", {})
-            if result.get("type") != "player" or (entity.get("sport", {}).get("name") != "Tennis"):
+            if result.get("type") != "player" or not entity.get("id"):
                 continue
 
             api_name = entity.get("name", "").lower()
+            api_name_parts = set(api_name.replace(',', '').replace('.', '').split())
 
-            # --- Scoring Logic ---
-            current_score = 0
-            for part in query_parts:
-                if part in api_name:
-                    current_score += 1
+            # A match is valid if all parts of the user's query are a subset of the API result name's parts.
+            # This handles "Ben Shelton" matching "Shelton, Ben" perfectly.
+            if query_parts.issubset(api_name_parts):
+                potential_matches.append(entity)
 
-            # --- Match Evaluation ---
-            if current_score > highest_score:
-                highest_score = current_score
-                best_match = entity
-                is_ambiguous = False  # We found a new, better match
-            elif current_score == highest_score and highest_score > 0:
-                # This detects a tie, meaning the result is ambiguous
-                is_ambiguous = True
+    if not potential_matches:
+        logger.warning(f"No potential matches found for '{player_name}'.")
+        return None
 
-    # --- Final Decision ---
-    # A confident match requires a "perfect score" (all parts of the query were found)
-    # and must not be ambiguous (no other results tied for the same high score).
-    if best_match and highest_score == len(query_parts) and not is_ambiguous:
-        player_id = best_match.get("id")
-        if isinstance(player_id, int):
-            api_name_found = best_match.get('name')
-            logger.info(f"SUCCESS: Found confident ID {player_id} for '{player_name}' (API name '{api_name_found}')")
-            return player_id
+    # De-duplicate the results based on the unique player ID.
+    unique_matches = {match['id']: match for match in potential_matches}.values()
 
-    logger.warning(f"Could not find a confident, unambiguous match for '{player_name}'. Best score was {highest_score}. Ambiguity detected: {is_ambiguous}.")
-    return None
+    if len(unique_matches) == 1:
+        match = list(unique_matches)[0]
+        player_id = match.get("id")
+        logger.info(
+            f"SUCCESS: Found ONE unique, confident match for '{player_name}'. ID: {player_id}, Name: {match.get('name')}")
+        return player_id
+    else:
+        # If we find more than one unique player, it's ambiguous.
+        logger.warning(
+            f"Found {len(unique_matches)} AMBIGUOUS matches for '{player_name}'. Cannot proceed confidently.")
+        for match in unique_matches:
+            logger.warning(f"  - Ambiguous match found: ID {match.get('id')}, Name: {match.get('name')}")
+        return None
 
 
 async def get_h2h_events(player1_name: str, player2_name: str) -> Dict[str, Any]:
@@ -300,7 +302,8 @@ async def get_h2h_events(player1_name: str, player2_name: str) -> Dict[str, Any]
     if not all([player1_id, player2_id]):
         failed_player = player1_name if not player1_id else player2_name
         logger.warning(f"Could not find a unique player ID for '{failed_player}'.")
-        return {"summary": f"I had trouble finding a player named '{failed_player}' in my records. Could you try their full name?"}
+        return {
+            "summary": f"I had trouble finding a player named '{failed_player}'. Could you try their full name or check the spelling?"}
 
     h2h_data = await _make_request_async(f"api/tennis/player/{player1_id}/h2h/{player2_id}")
     if "error" in h2h_data or not h2h_data.get("events"):
@@ -310,7 +313,8 @@ async def get_h2h_events(player1_name: str, player2_name: str) -> Dict[str, Any]
     return await _process_h2h_data_and_return(h2h_data, player1_id, player2_id, player1_name, player2_name)
 
 
-async def _process_h2h_data_and_return(h2h_data: Dict[str, Any], player1_id: int, player2_id: int, player1_name: str, player2_name: str) -> Dict[str, Any]:
+async def _process_h2h_data_and_return(h2h_data: Dict[str, Any], player1_id: int, player2_id: int, player1_name: str,
+                                       player2_name: str) -> Dict[str, Any]:
     try:
         player1_canonical_name, player2_canonical_name = player1_name, player2_name
         h2h_events = h2h_data.get("events", [])
@@ -326,27 +330,41 @@ async def _process_h2h_data_and_return(h2h_data: Dict[str, Any], player1_id: int
         for match in h2h_events:
             winner_code = match.get("winnerCode")
             home_id = match.get("homeTeam", {}).get("id")
-            if winner_code == 1 and home_id == player1_id: p1_wins += 1
-            elif winner_code == 1 and home_id == player2_id: p2_wins += 1
-            elif winner_code == 2 and match.get("awayTeam", {}).get("id") == player1_id: p1_wins += 1
-            elif winner_code == 2 and match.get("awayTeam", {}).get("id") == player2_id: p2_wins += 1
+            if winner_code == 1 and home_id == player1_id:
+                p1_wins += 1
+            elif winner_code == 1 and home_id == player2_id:
+                p2_wins += 1
+            elif winner_code == 2 and match.get("awayTeam", {}).get("id") == player1_id:
+                p1_wins += 1
+            elif winner_code == 2 and match.get("awayTeam", {}).get("id") == player2_id:
+                p2_wins += 1
 
         recent_matches = []
         for match in h2h_events[:3]:
             winner_name = "N/A"
-            if match.get("winnerCode") == 1: winner_name = match.get("homeTeam", {}).get("name")
-            elif match.get("winnerCode") == 2: winner_name = match.get("awayTeam", {}).get("name")
+            if match.get("winnerCode") == 1:
+                winner_name = match.get("homeTeam", {}).get("name")
+            elif match.get("winnerCode") == 2:
+                winner_name = match.get("awayTeam", {}).get("name")
             timestamp = match.get("startTimestamp")
             match_date = datetime.datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d') if timestamp else "N/A"
-            score_parts = [f"{match.get('homeScore',{}).get(f'period{i}')}-{match.get('awayScore',{}).get(f'period{i}')}" for i in range(1, 6) if match.get('homeScore',{}).get(f'period{i}')]
-            recent_matches.append({"date": match_date, "tournament": match.get("tournament", {}).get("name"), "winner": winner_name, "score": ", ".join(score_parts) or "N/A"})
+            score_parts = [
+                f"{match.get('homeScore', {}).get(f'period{i}')}-{match.get('awayScore', {}).get(f'period{i}')}" for i
+                in range(1, 6) if match.get('homeScore', {}).get(f'period{i}')]
+            recent_matches.append(
+                {"date": match_date, "tournament": match.get("tournament", {}).get("name"), "winner": winner_name,
+                 "score": ", ".join(score_parts) or "N/A"})
 
         summary_text = f"The head-to-head record between {player1_canonical_name} and {player2_canonical_name} is tied {p1_wins}-{p1_wins}."
-        if p1_wins > p2_wins: summary_text = f"{player1_canonical_name} leads {player2_canonical_name} {p1_wins}-{p2_wins} in their head-to-head matches."
-        elif p2_wins > p1_wins: summary_text = f"{player2_canonical_name} leads {player1_canonical_name} {p2_wins}-{p1_wins} in their head-to-head matches."
+        if p1_wins > p2_wins:
+            summary_text = f"{player1_canonical_name} leads {player2_canonical_name} {p1_wins}-{p2_wins} in their head-to-head matches."
+        elif p2_wins > p1_wins:
+            summary_text = f"{player2_canonical_name} leads {player1_canonical_name} {p2_wins}-{p1_wins} in their head-to-head matches."
 
         logger.info(f"Successfully processed H2H data: {summary_text}")
-        return {"summary": summary_text, "overall_record": {f"{player1_canonical_name}_wins": p1_wins, f"{player2_canonical_name}_wins": p2_wins}, "recent_matches": recent_matches}
+        return {"summary": summary_text, "overall_record": {f"{player1_canonical_name}_wins": p1_wins,
+                                                            f"{player2_canonical_name}_wins": p2_wins},
+                "recent_matches": recent_matches}
     except Exception as e:
         logger.critical(f"Failed to parse H2H response: {e}", exc_info=True)
         return await perform_web_search(f"Head to head record between {player1_name} and {player2_name} tennis")
