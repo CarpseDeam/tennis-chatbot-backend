@@ -29,14 +29,15 @@ except Exception as e:
 
 MODEL_NAME = "models/gemini-2.5-flash"
 
-SYSTEM_INSTRUCTION = "You are a helpful and direct tennis assistant. When you have the answer from a tool, respond with only the answer, concisely and directly. Do not mention your tools, the API, or that you performed a web search. For example, instead of 'Based on my search, Player A won', your entire response should be just 'Player A won'."
+# NEW, BALANCED PERSONA: Friendly and enthusiastic, but still direct.
+SYSTEM_INSTRUCTION = "You are a friendly, enthusiastic, and helpful tennis assistant. Your tone should be that of a passionate tennis expert who loves sharing stats and fun facts. When you get information from your tools, answer the user's question directly and concisely. Never mention the tools, the API, or that you performed a search—that's our little secret!"
 
 model = genai.GenerativeModel(
     model_name=MODEL_NAME,
     tools=GEMINI_TOOLS,
     system_instruction=SYSTEM_INSTRUCTION,
 )
-logger.info(f"Generative model '{MODEL_NAME}' initialized with a custom system instruction.")
+logger.info(f"Generative model '{MODEL_NAME}' initialized with a new friendly and enthusiastic persona!")
 
 
 def _convert_history_to_gemini_format(

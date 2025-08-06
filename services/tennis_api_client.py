@@ -35,8 +35,7 @@ async def _make_request_async(full_url_path: str) -> Dict[str, Any]:
             return response.json()
     except httpx.HTTPStatusError as http_err:
         logger.error(f"HTTP error for {url}: {http_err.response.status_code} - {http_err.response.text}", exc_info=True)
-        return {
-            "error": f"API request failed with status {http_err.response.status_code}. Response: {http_err.response.text}"}
+        return {"error": f"API request failed with status {http_err.response.status_code}. Response: {http_err.response.text}"}
     except httpx.RequestError as req_err:
         logger.error(f"Request error for {url}: {req_err}", exc_info=True)
         return {"error": "Could not connect to the Tennis API."}
@@ -92,18 +91,16 @@ def _simplify_match_data(event_data: Dict[str, Any]) -> Dict[str, Any]:
         home_score = event_data.get("home_score", {})
         away_score = event_data.get("away_score", {})
 
-        # The API gives winnerCode for the *away* team in the home player's score object sometimes.
-        # We check both home and away score objects for a definitive winner code.
-        winner_code = home_score.get("winnerCode", away_score.get("winnerCode"))
+        winner_code = event_data.get("winnerCode", home_score.get("winnerCode", away_score.get("winnerCode")))
 
         winner_name = "N/A"
-        if winner_code == 1:  # Home player wins
+        if winner_code == 1:
             winner_name = event_data.get("home_player")
-        elif winner_code == 2:  # Away player wins
+        elif winner_code == 2:
             winner_name = event_data.get("away_player")
 
         score_summary = []
-        for i in range(1, 6):  # Check for up to 5 sets
+        for i in range(1, 6):
             period_key = f"period{i}"
             if period_key in home_score and period_key in away_score:
                 score_summary.append(f"{home_score.get(period_key)}-{away_score.get(period_key)}")
@@ -136,10 +133,25 @@ def _simplify_match_data(event_data: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": "Failed to parse and simplify match data."}
 
 
-async def find_match_and_get_details(player1_name: str, date: str, player2_name: Optional[str] = None) -> Dict[
-    str, Any]:
+async def find_match_and_get_details(player1_name: str, player2_name: str, date: Optional[str] = None) -> Dict[str, Any]:
     logger.info(f"Universal match search for player1='{player1_name}', player2='{player2_name}', date='{date}'")
 
+    # If the date is not provided, return a list of recent matches for clarification.
+    if not date:
+        logger.info("Date not provided. Returning H2H history for user clarification.")
+        h2h_data = await get_h2h_events(player1_name, player2_name)
+
+        # Check if we got a list of recent matches from the H2H tool
+        if h2h_data.get("recent_matches"):
+            return {
+                "summary": f"Multiple recent matches found for {player1_name} and {player2_name}. Asking user to clarify.",
+                "clarification_options": h2h_data["recent_matches"]
+            }
+        else:
+            # If H2H tool failed or found no matches, return that summary
+            return h2h_data
+
+    # If date IS provided, proceed with the original logic.
     daily_events_data = await get_scheduled_events_by_date(date)
     if "error" in daily_events_data:
         return daily_events_data
@@ -150,21 +162,21 @@ async def find_match_and_get_details(player1_name: str, date: str, player2_name:
 
     target_event = None
     p1_lower = player1_name.lower()
-    p2_lower = player2_name.lower() if player2_name else None
+    p2_lower = player2_name.lower()
 
     for event in events:
         home_player = event.get("home_player", "").lower()
         away_player = event.get("away_player", "").lower()
         p1_in_match = p1_lower in home_player or p1_lower in away_player
-        p2_in_match = not p2_lower or (p2_lower in home_player or p2_lower in away_player)
+        p2_in_match = p2_lower in home_player or p2_lower in away_player
 
         if p1_in_match and p2_in_match:
             target_event = event
-            logger.info(f"Found target match: {target_event}")
+            logger.info(f"Found target match on {date}: {target_event}")
             break
 
     if not target_event:
-        search_desc = f"'{player1_name}'" + (f" vs '{player2_name}'" if player2_name else "")
+        search_desc = f"'{player1_name}' vs '{player2_name}'"
         logger.warning(f"Could not find a match for {search_desc} in the schedule for {date}.")
         return {"summary": f"I looked for a match with {search_desc} on {date} but couldn't find one."}
 
@@ -196,12 +208,7 @@ async def _find_player_id_by_name(player_name: str) -> Optional[int]:
 
     async def find_in_results(data: Dict[str, Any], name: str) -> Optional[int]:
         if "error" in data or not data.get("results"): return None
-        return next((entity.get("id") for result in data.get("results", []) if
-                     (entity := result.get("entity", {})) and result.get("type") == "player" and entity.get("sport",
-                                                                                                            {}).get(
-                         "name") == "Tennis" and all(
-                         part in entity.get("name", "").lower() for part in name.lower().split()) and isinstance(
-                         entity.get("id"), int)), None)
+        return next((entity.get("id") for result in data.get("results", []) if (entity := result.get("entity", {})) and result.get("type") == "player" and entity.get("sport", {}).get("name") == "Tennis" and all(part in entity.get("name", "").lower() for part in name.lower().split()) and isinstance(entity.get("id"), int)), None)
 
     search_data = await _make_request_async(f"api/tennis/search/{urllib.parse.quote(player_name)}")
     player_id = await find_in_results(search_data, player_name)
@@ -215,7 +222,6 @@ async def _find_player_id_by_name(player_name: str) -> Optional[int]:
 
     logger.error(f"All search strategies failed for '{player_name}'.")
     return None
-
 
 async def get_h2h_events(player1_name: str, player2_name: str) -> Dict[str, Any]:
     logger.info(f"H2H: Starting lookup for '{player1_name}' vs '{player2_name}'")
@@ -234,9 +240,7 @@ async def get_h2h_events(player1_name: str, player2_name: str) -> Dict[str, Any]
 
     return _process_h2h_data_and_return(h2h_data, player1_id, player2_id, player1_name, player2_name)
 
-
-def _process_h2h_data_and_return(h2h_data: Dict[str, Any], player1_id: int, player2_id: int, player1_name: str,
-                                 player2_name: str) -> Dict[str, Any]:
+def _process_h2h_data_and_return(h2h_data: Dict[str, Any], player1_id: int, player2_id: int, player1_name: str, player2_name: str) -> Dict[str, Any]:
     try:
         player1_canonical_name = player1_name
         player2_canonical_name = player2_name
@@ -264,14 +268,10 @@ def _process_h2h_data_and_return(h2h_data: Dict[str, Any], player1_id: int, play
             home_id = match.get("homeTeam", {}).get("id")
             away_id = match.get("awayTeam", {}).get("id")
 
-            if winner_code == 1 and home_id == player1_id:
-                p1_wins += 1
-            elif winner_code == 1 and home_id == player2_id:
-                p2_wins += 1
-            elif winner_code == 2 and away_id == player1_id:
-                p1_wins += 1
-            elif winner_code == 2 and away_id == player2_id:
-                p2_wins += 1
+            if winner_code == 1 and home_id == player1_id: p1_wins += 1
+            elif winner_code == 1 and home_id == player2_id: p2_wins += 1
+            elif winner_code == 2 and away_id == player1_id: p1_wins += 1
+            elif winner_code == 2 and away_id == player2_id: p2_wins += 1
 
         recent_matches = []
         MAX_MATCHES_TO_RETURN = 5

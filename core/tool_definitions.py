@@ -30,21 +30,21 @@ logger = logging.getLogger(__name__)
 # --- THE NEW, ROBUST SUPER-TOOL ---
 find_match_and_get_details_func = FunctionDeclaration(
     name="find_match_and_get_details",
-    description="The absolute best tool for finding all details about a specific match. Use this to find the score, winner, or statistics (like aces) for a match when you know the player(s) and optionally the date. This tool automatically finds the match and gets all available data in one step.",
+    description="The absolute best tool for finding all details about a specific match. If the user provides a date, it gets that specific match. If the date is MISSING, this tool returns a list of recent matches so you can ask the user to clarify which one they mean.",
     parameters=Schema(
         type=Type.OBJECT,
         properties={
             "player1_name": Schema(type=Type.STRING, description="The name of one of the players in the match."),
-            "player2_name": Schema(type=Type.STRING, description="(Optional) The name of the second player in the match for a more specific search."),
-            "date": Schema(type=Type.STRING, description="The date of the match. Can be 'today', 'tomorrow', 'yesterday', or a date like '2024-12-25'."),
+            "player2_name": Schema(type=Type.STRING, description="The name of the second player in the match for a more specific search."),
+            "date": Schema(type=Type.STRING, description="(Optional) The date of the match. Can be 'today', 'tomorrow', 'yesterday', or 'YYYY-MM-DD'."),
         },
-        required=["player1_name", "date"],
+        required=["player1_name", "player2_name"],
     ),
 )
 
 get_h2h_events_func = FunctionDeclaration(
     name="get_h2h_events",
-    description="Fetches the career head-to-head (H2H) win/loss record between two players. This is for the overall historical record, not for the score of a single recent match.",
+    description="Fetches the career head-to-head (H2H) win/loss record and a list of recent matches between two players. This is for the overall historical record, not for the detailed stats of a single match.",
     parameters=Schema(
         type=Type.OBJECT,
         properties={
