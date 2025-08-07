@@ -17,6 +17,7 @@ from services.tennis_tools import (
     get_rankings,
     get_odds_by_date,
     get_player_recent_matches,
+    get_live_itf_matches,
     debug_api_search,
 )
 from services.web_search_client import perform_web_search
@@ -25,17 +26,20 @@ logger = logging.getLogger(__name__)
 
 # --- Tool Function Declarations ---
 
+get_live_itf_matches_func = FunctionDeclaration(
+    name="get_live_itf_matches",
+    description="The absolute BEST and ONLY tool for questions about **live ITF matches**. Use for 'Are there any live ITF matches?' or 'Show me live ITF scores'. This data is from a special Tenipo service.",
+)
+
 find_match_and_get_details_func = FunctionDeclaration(
     name="find_match_and_get_details",
-    description="Use to find everything about a specific match when player names are mentioned. It can find LIVE scores, upcoming schedules, and past results with detailed stats.",
+    description="Use to find everything about a specific match when player names are mentioned (ATP, WTA, etc., but NOT live ITF matches). It can find LIVE scores, upcoming schedules, and past results with detailed stats.",
     parameters=Schema(
-        type=Type.OBJECT,
-        properties={
+        type=Type.OBJECT, properties={
             "player1_name": Schema(type=Type.STRING, description="The name of one player."),
             "player2_name": Schema(type=Type.STRING, description="(Optional) The name of the second player."),
             "date": Schema(type=Type.STRING, description="(Optional) The match date ('today', 'tomorrow', 'YYYY-MM-DD')."),
-        },
-        required=["player1_name"],
+        }, required=["player1_name"],
     ),
 )
 
@@ -91,6 +95,7 @@ debug_api_search_func = FunctionDeclaration(
 # --- Final, Assembled Toolset for the LLM ---
 GEMINI_TOOLS: List[Tool] = [
     Tool(function_declarations=[
+        get_live_itf_matches_func,
         find_match_and_get_details_func,
         get_player_recent_matches_func,
         get_h2h_events_func,
@@ -104,6 +109,7 @@ GEMINI_TOOLS: List[Tool] = [
 
 # --- Final, Assembled Registry for the Backend ---
 TOOL_REGISTRY: Dict[str, Callable[..., Any]] = {
+    "get_live_itf_matches": get_live_itf_matches,
     "find_match_and_get_details": find_match_and_get_details,
     "get_player_recent_matches": get_player_recent_matches,
     "get_h2h_events": get_h2h_events,

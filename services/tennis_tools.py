@@ -11,10 +11,26 @@ import asyncio
 from typing import Any, Dict, Optional, List
 
 # Import our specialist modules
-from services.tennis_logic import api_client, data_parser, player_finder
+from services.tennis_logic import api_client, data_parser, player_finder, tenipo_client
 from services.web_search_client import perform_web_search
 
 logger = logging.getLogger(__name__)
+
+
+async def get_live_itf_matches() -> Dict[str, Any]:
+    """
+    Gets a list of special live ITF matches from the dedicated scraper service.
+    """
+    logger.info("Tool 'get_live_itf_matches' called.")
+
+    scraped_data = await tenipo_client.get_live_itf_data_from_api()
+    if "error" in scraped_data:
+        return scraped_data
+
+    return {
+        "summary": f"Found {scraped_data.get('match_count', 0)} live ITF matches from the special Tenipo feed.",
+        "matches": scraped_data.get('matches', [])
+    }
 
 
 async def _find_and_process_specific_match(events: List[Dict], p1_name: str, p2_name: Optional[str]) -> Optional[Dict]:
@@ -123,7 +139,6 @@ async def get_general_schedule(date: str) -> Dict[str, Any]:
         return {"error": "Invalid date format. Please use 'today', 'tomorrow', 'yesterday', or YYYY-MM-DD."}
 
 
-# --- SPRINT FEATURE 1 ---
 async def get_odds_by_date(date: str) -> Dict[str, Any]:
     """Gets betting odds for all matches on a specific date."""
     logger.info(f"Tool 'get_odds_by_date' called for date: {date}")
@@ -135,13 +150,11 @@ async def get_odds_by_date(date: str) -> Dict[str, Any]:
         api_date_str = target_date.strftime("%d/%m/%Y")
 
         raw_data = await api_client.make_api_request(f"api/tennis/events/odds/{api_date_str}")
-        return data_parser.parse_event_list(
-            raw_data)  # Odds endpoint returns an event list, so we can reuse the parser!
+        return data_parser.parse_event_list(raw_data)
     except ValueError:
         return {"error": "Invalid date format. Please use 'today', 'tomorrow', 'yesterday', or YYYY-MM-DD."}
 
 
-# --- SPRINT FEATURE 2 ---
 async def get_player_recent_matches(player_name: str) -> Dict[str, Any]:
     """Finds a player by name and fetches their recent match history."""
     logger.info(f"Tool 'get_player_recent_matches' called for player: '{player_name}'")
@@ -152,7 +165,7 @@ async def get_player_recent_matches(player_name: str) -> Dict[str, Any]:
             "summary": f"I couldn't find a unique player named '{player_name}'. Please try their full name or check the spelling."}
 
     raw_data = await api_client.make_api_request(f"api/tennis/player/{player_id}/events/previous/0")
-    return data_parser.parse_event_list(raw_data)  # Player history also returns an event list, reuse is great!
+    return data_parser.parse_event_list(raw_data)
 
 
 async def get_rankings(ranking_type: str) -> Dict[str, Any]:
