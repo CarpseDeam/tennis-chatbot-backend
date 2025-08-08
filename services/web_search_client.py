@@ -1,69 +1,70 @@
 # services/web_search_client.py
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
+
 import httpx
-from bs4 import BeautifulSoup
-import urllib.parse
+from config import settings
 
 logger = logging.getLogger(__name__)
 
-# Define headers to mimic a real web browser
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-}
+# The base URL for the Google Custom Search JSON API
+BASE_URL = "https://www.googleapis.com/customsearch/v1"
 
 
 async def perform_web_search(query: str) -> Dict[str, Any]:
     """
-    Performs a REAL, live web search by scraping DuckDuckGo results.
-    This function is self-contained, asynchronous, and requires no external API keys.
-    """
-    logger.info(f"Performing async web scrape for query: '{query}'")
+    Performs a live web search using the official Google Custom Search JSON API.
 
-    # URL-encode the query to handle spaces and special characters
-    encoded_query = urllib.parse.quote_plus(query)
-    search_url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
+    This function is asynchronous, robust, and relies on configured API keys.
+    If keys are not provided, the application will fail on startup.
+    """
+    logger.info(f"Performing API-based Google Search for query: '{query}'")
+
+    # API Request Parameters
+    params = {
+        "key": settings.google_search_api_key,
+        "cx": settings.google_cse_id,
+        "q": query,
+        "num": 5  # Request the top 5 results
+    }
 
     try:
-        # Use httpx.AsyncClient for non-blocking I/O
+        # Use httpx.AsyncClient for non-blocking, asynchronous I/O
         async with httpx.AsyncClient() as client:
-            response = await client.get(search_url, headers=HEADERS, timeout=10)
-            response.raise_for_status()  # Will raise an error for bad status codes
+            response = await client.get(BASE_URL, params=params, timeout=10)
+            response.raise_for_status()  # Raises HTTPStatusError for 4xx/5xx responses
+            search_results = response.json()
 
-        # Parse the HTML content using BeautifulSoup
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # --- Process the API Response ---
+        items: List[Dict[str, Any]] = search_results.get("items", [])
 
-        # Find all the search result snippets.
-        # DuckDuckGo's simple HTML version uses a 'result' class for these.
-        results = soup.find_all('div', class_='result')
-
-        # Extract the text content from the first few results
-        # to create a context for the LLM. We'll take up to 5.
-        context_snippets = []
-        for result in results[:5]:
-            snippet = result.find('a', class_='result__snippet')
-            if snippet:
-                context_snippets.append(snippet.get_text(strip=True))
-
-        if not context_snippets:
-            logger.warning(f"Web scrape for '{query}' yielded no results.")
+        if not items:
+            logger.warning(f"Google Search for '{query}' yielded no results.")
             return {"summary": "I searched but couldn't find any relevant information."}
 
-        # Join the snippets into a single context string
-        full_context = "\n".join(f"- {s}" for s in context_snippets)
+        # Format the results into a clean context string for the LLM
+        context_snippets = []
+        for item in items:
+            title = item.get("title", "No Title")
+            snippet = item.get("snippet", "No Snippet Available").replace("\n", " ")
+            context_snippets.append(f"Title: {title}\nSnippet: {snippet}")
 
-        logger.info(f"Successfully scraped {len(context_snippets)} snippets for the query.")
+        full_context = "\n\n".join(context_snippets)
+        logger.info(f"Successfully retrieved {len(context_snippets)} snippets from Google Search.")
 
         # Return the raw context for the LLM to process
         return {
             "context": full_context,
-            "source": "Self-Hosted Web Scraper"
+            "source": "Google Custom Search API"
         }
 
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error during Google Search: {e.response.status_code} - {e.response.text}", exc_info=True)
+        return {"error": f"The web search service returned an error: {e.response.status_code}"}
     except httpx.RequestError as e:
-        logger.error(f"Network error during web scrape: {e}", exc_info=True)
-        return {"error": f"Failed to connect to search engine: {str(e)}"}
+        logger.error(f"Network error during Google Search: {e}", exc_info=True)
+        return {"error": f"Failed to connect to the web search service: {str(e)}"}
     except Exception as e:
-        logger.error(f"An unexpected error occurred during web scraping: {e}", exc_info=True)
-        return {"error": f"An error occurred while trying to search the web."}
+        logger.error(f"An unexpected error occurred during Google Search: {e}", exc_info=True)
+        return {"error": "An unexpected error occurred while trying to search the web."}

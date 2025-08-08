@@ -1,3 +1,4 @@
+# requirements.txt
 fastapi
 uvicorn[standard]
 google-generativeai
@@ -6,3 +7,4 @@ python-dotenv
 pydantic-settings
 beautifulsoup4
 httpx
+tenacity

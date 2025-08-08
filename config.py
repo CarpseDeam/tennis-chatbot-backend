@@ -16,15 +16,18 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
     # --- Required API Keys ---
-    google_api_key: str
+    google_api_key: str  # For Gemini
     tennis_api_key: str
     admin_api_key: str
+
+    # --- Google Search Keys (Now Required!) ---
+    google_search_api_key: str
+    google_cse_id: str
 
     # --- API Service Hosts ---
     tennis_api_host: str
 
     # --- Custom Scraper Service URL ---
-    # The base URL for the custom Tenipo scraper service.
     tenipo_api_base_url: Optional[HttpUrl] = None
 
     # --- General Settings ---
