@@ -8,7 +8,7 @@ import logging
 from typing import Any, Dict
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception, retry_if_exception_type
 
 from config import settings
 
@@ -38,7 +38,7 @@ def is_retryable_status_code(exception: BaseException) -> bool:
     stop=stop_after_attempt(4),
 
     # We retry on network issues OR 5xx server errors.
-    retry=(retry_if_exception_type(RETRYABLE_EXCEPTIONS) | retry_if_exception_type(is_retryable_status_code)),
+    retry=(retry_if_exception_type(RETRYABLE_EXCEPTIONS) | retry_if_exception(is_retryable_status_code)),
 
     # Log a warning before each retry attempt. This gives us visibility.
     before_sleep=lambda retry_state: logger.warning(
