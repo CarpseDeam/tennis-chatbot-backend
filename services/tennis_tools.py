@@ -69,6 +69,7 @@ async def find_match_and_get_details(player1_name: str, player2_name: Optional[s
     logger.info(f"Tool 'find_match_and_get_details' called for P1='{player1_name}', P2='{player2_name}', Date='{date}'")
     search_desc = f"'{player1_name}'" + (f" vs '{player2_name}'" if player2_name else "")
 
+    # Path 1: A specific date is provided. This logic is clear and remains unchanged.
     if date:
         logger.info(f"Date provided. Searching schedule for {date}.")
         daily_events_data = await get_general_schedule(date)
@@ -78,6 +79,8 @@ async def find_match_and_get_details(player1_name: str, player2_name: Optional[s
                                                                player1_name, player2_name)
         return match_details or {"summary": f"I looked for a match with {search_desc} on {date} but couldn't find one."}
 
+    # Path 2: No date provided. The user could mean a live match or the most recent past match.
+    # Step 2a: Check for a live match first.
     logger.info("No date provided. Checking for LIVE matches.")
     live_events_raw = await api_client.make_api_request("api/tennis/events/live")
     live_events_parsed = data_parser.parse_event_list(live_events_raw)
@@ -89,17 +92,50 @@ async def find_match_and_get_details(player1_name: str, player2_name: Optional[s
             logger.info("Found LIVE match. Returning immediately.")
             return live_match_details
 
-    logger.info("No live match found. Looking up H2H for clarification.")
+    # Step 2b: If no live match, find the most recent past encounter.
+    logger.info("No live match found. Checking for the most recent H2H match.")
     if not player2_name:
-        return {"summary": "To find a past match without a date, please provide two player names."}
+        return {"error": "To find a past match without a date, two player names are required."}
 
-    h2h_data = await get_h2h_events(player1_name, player2_name)
-    if h2h_data.get("recent_matches"):
-        return {
-            "summary": f"I couldn't find a live match, but I found several recent matches for {player1_name} and {player2_name}. Please ask the user to clarify.",
-            "clarification_options": h2h_data["recent_matches"]
-        }
-    return h2h_data
+    # Find player IDs first. If either fails, we cannot proceed.
+    p1_id, p2_id = await asyncio.gather(
+        player_finder.find_player_id_by_name(player1_name),
+        player_finder.find_player_id_by_name(player2_name)
+    )
+
+    if not p1_id or not p2_id:
+        failed_player = player1_name if not p1_id else player2_name
+        logger.warning(f"Could not find a unique player ID for '{failed_player}'. Failing tool to trigger web search.")
+        return {"error": f"Could not find a player named '{failed_player}'. Triggering web search."}
+
+    # Fetch the H2H event list from the API.
+    h2h_raw_data = await api_client.make_api_request(f"api/tennis/player/{p1_id}/h2h/{p2_id}")
+
+    # Check if the H2H search returned any events.
+    h2h_events = h2h_raw_data.get("events")
+    if not h2h_events:
+        logger.warning(f"API returned no H2H events for {player1_name} and {player2_name}. Failing tool to trigger web search.")
+        return {"error": f"API found no match history for {player1_name} and {player2_name}. Triggering web search."}
+
+    # Success! Get the most recent match (it's the first in the list).
+    most_recent_event = h2h_events[0]
+    event_id = most_recent_event.get("id")
+    logger.info(f"Found most recent match. Event ID: {event_id}. Fetching its details.")
+
+    # Now, get the full details and stats for that specific event.
+    parsed_event = data_parser.parse_event_list({"events": [most_recent_event]})
+    match_data = await _find_and_process_specific_match(parsed_event.get("events_preview", []), player1_name, player2_name)
+
+    # If we successfully got the match data, we will now modify the summary
+    # to give the LLM explicit instructions for a nuanced response.
+    if match_data:
+        match_data["summary"] = (
+            f"Successfully found the most recent match for {player1_name} and {player2_name}. "
+            "Present the details of this match as the primary answer, but also "
+            "add a brief follow-up question to ask if the user meant a different match."
+        )
+
+    return match_data
 
 
 async def get_h2h_events(player1_name: str, player2_name: str) -> Dict[str, Any]:
