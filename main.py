@@ -45,8 +45,8 @@ app = FastAPI(
 
 # --- Include API Routers ---
 # Include the chat router in the main FastAPI application.
-# All routes defined in the chat_router (e.g., /api/chat) will now be
-# part of the main application.
+# All routes defined in the chat_router (e.g., /api/chat and the secure
+# /api/debug/search) will now be part of the main application.
 app.include_router(chat_router)
 logger.info("Chat API router included successfully.")
 
