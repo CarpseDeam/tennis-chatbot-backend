@@ -1,21 +1,18 @@
 # core/llm_processor.py
 
 """
-Orchestrates the entire interaction with the Gemini model. It takes a user query,
-manages the tool-calling loop, executes the appropriate tool function
-(with fallback logic), and generates the final natural language response.
+Orchestrates the interaction with the Gemini model. It takes a user query
+and conversation history, and generates a natural language response based
+solely on the provided context.
 """
 
 import logging
-import inspect
 from typing import List, Dict, Any
 
 import google.generativeai as genai
 
 from config import settings
 from schemas.chat_schemas import ChatRequest, ChatResponse, ChatMessage
-from core.tool_definitions import GEMINI_TOOLS, TOOL_REGISTRY
-from services.web_search_client import perform_web_search
 
 logger = logging.getLogger(__name__)
 
@@ -29,22 +26,23 @@ except Exception as e:
 
 MODEL_NAME = "models/gemini-2.5-flash"
 
-# --- DYNAMIC AND ROBUST SYSTEM PROMPT ---
-# This prompt gives the model clearer instructions on how to act smart.
-SYSTEM_INSTRUCTION = """You are a friendly, enthusiastic, and helpful tennis assistant. Your tone should be that of a passionate tennis expert who loves sharing stats and fun facts.
+# --- NEW, FOCUSED SYSTEM PROMPT ---
+# This prompt instructs the model to ONLY use the conversation history.
+SYSTEM_INSTRUCTION = """You are a friendly, enthusiastic, and helpful tennis assistant. Your tone should be that of a passionate tennis expert.
 
-Your primary goal is to provide direct, accurate answers. Follow these rules:
-1.  **NEVER mention your tools.** Do not say "I used a tool" or "I performed a search." Act like you know the information yourself. This is our little secret.
-2.  **Prioritize Clarity.** If a tool gives you a list of matches (clarification options), present these options clearly to the user so they can choose.
-3.  **Be a Smart Problem-Solver.** If a primary tool fails, you will receive an error message and supplemental information from a web search. Use the web search information to answer the user's original question to the best of your ability.
+Your primary goal is to answer questions based **ONLY** on the information provided in our conversation history. Follow these rules strictly:
+1.  **Stick to the Provided Context.** Your knowledge is limited to the text and data I have given you in previous messages. Do not use any external knowledge.
+2.  **Do Not Make Things Up.** If the answer to a question cannot be found in our conversation history, you MUST say "I'm sorry, but I don't have that information in our current conversation." Do not guess or hallucinate an answer.
+3.  **Be Conversational.** Use the context to answer questions naturally. For example, if the user asks "what did you just show me?", you should summarize the data chunks you were just given.
 """
 
+# We initialize the model WITHOUT any tools. This is the key change.
 model = genai.GenerativeModel(
     model_name=MODEL_NAME,
-    tools=GEMINI_TOOLS,
+    # No 'tools' parameter means no tool-calling!
     system_instruction=SYSTEM_INSTRUCTION,
 )
-logger.info(f"Generative model '{MODEL_NAME}' initialized with a new DYNAMIC and ROBUST persona!")
+logger.info(f"Generative model '{MODEL_NAME}' initialized in CONTEXT-ONLY mode. Tool-calling is disabled.")
 
 
 def _convert_history_to_gemini_format(
@@ -63,6 +61,7 @@ def _convert_history_to_gemini_format(
 async def process_chat_request(request: ChatRequest) -> ChatResponse:
     """
     Processes a user's chat request by orchestrating with the Gemini model.
+    This version is simplified to be purely conversational without tool-calling.
     """
     try:
         history = []
@@ -70,90 +69,14 @@ async def process_chat_request(request: ChatRequest) -> ChatResponse:
             history = _convert_history_to_gemini_format(request.history)
 
         chat = model.start_chat(history=history)
-        prompt: Any = request.query
-        used_sources: List[str] = []
-        max_turns = 5
+        logger.info("Sending prompt to Gemini for a direct text response.")
+        response = await chat.send_message_async(request.query)
 
-        for turn_num in range(max_turns):
-            logger.info(f"Turn {turn_num + 1}: Sending prompt to Gemini. Prompt type: {type(prompt).__name__}")
-            response = await chat.send_message_async(prompt)
+        final_text = response.text
+        logger.info("Successfully received a text response from the LLM.")
 
-            try:
-                final_text = response.text
-                logger.info(f"LLM provided a final text response on turn {turn_num + 1}. Exiting loop.")
-                return ChatResponse(
-                    response=final_text,
-                    sources=used_sources if used_sources else None,
-                )
-            except ValueError:
-                logger.info(f"LLM response on turn {turn_num + 1} contains a function call, proceeding to execute.")
-                pass
+        return ChatResponse(response=final_text)
 
-            tool_responses = []
-            for part in response.parts:
-                if not part.function_call:
-                    continue
-
-                call = part.function_call
-                function_name = call.name
-                args = dict(call.args)
-                tool_output = None
-                logger.info(f"Attempting to execute tool: {function_name} with args: {args}")
-
-                if function_name not in TOOL_REGISTRY:
-                    logger.error(f"LLM requested an unknown tool: '{function_name}'")
-                    tool_output = {"error": f"Tool '{function_name}' not found."}
-                else:
-                    tool_function = TOOL_REGISTRY[function_name]
-                    try:
-                        if inspect.iscoroutinefunction(tool_function):
-                            tool_output = await tool_function(**args)
-                        else:
-                            tool_output = tool_function(**args)
-
-                        module_name = tool_function.__module__.split('.')[-1]
-                        source_name = f"{module_name}: {function_name}"
-                        if source_name not in used_sources:
-                            used_sources.append(source_name)
-
-                        # --- ROBUSTNESS: SMART FALLBACK ON TOOL FAILURE ---
-                        is_primary_tool_failure = "error" in tool_output and function_name != "perform_web_search"
-                        if is_primary_tool_failure:
-                            logger.warning(f"Primary tool '{function_name}' failed. Triggering web search fallback.")
-                            # Use the original user query for the web search
-                            web_search_results = await perform_web_search(request.query)
-                            used_sources.append("web_search_client: perform_web_search")
-
-                            # Create a rich context for the LLM
-                            fallback_context = {
-                                "original_tool_error": tool_output,
-                                "web_search_context": web_search_results.get("context", "No information found from web search.")
-                            }
-                            tool_output = fallback_context
-                            logger.info("Created fallback context with web search data for the LLM.")
-
-                    except Exception as e:
-                        logger.error(f"Critical error executing tool '{function_name}': {e}", exc_info=True)
-                        tool_output = {"error": f"Execution failed for tool '{function_name}': {str(e)}"}
-
-                logger.info(f"Tool '{function_name}' returned: {tool_output}")
-                tool_responses.append(
-                    genai.protos.Part(
-                        function_response=genai.protos.FunctionResponse(
-                            name=function_name,
-                            response=tool_output
-                        )
-                    )
-                )
-
-            if not tool_responses:
-                logger.error("Response was identified as a tool call, but no valid function calls were processed.")
-                return ChatResponse(response="I tried to use a tool, but something went wrong. Please try again.")
-
-            prompt = tool_responses
-
-        logger.warning(f"Exceeded max tool-calling turns ({max_turns}).")
-        return ChatResponse(response="I'm having trouble finding an answer. Please try rephrasing your question.")
     except Exception as e:
         logger.critical(f"An unhandled exception occurred in process_chat_request: {e}", exc_info=True)
         return ChatResponse(response="I'm sorry, a critical error occurred and I can't process your request right now.")
