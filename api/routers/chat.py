@@ -12,7 +12,8 @@ primary interface between the web server and the application's core logic.
 import logging
 from fastapi import APIRouter, HTTPException, status
 from core.llm_processor import process_chat_request
-from schemas.chat_schemas import ChatRequest, ChatResponse
+from schemas.chat_schemas import ChatRequest, ChatResponse, ChatMessage
+from .. import session_manager
 
 # Set up a logger for this module
 logger = logging.getLogger(__name__)
@@ -29,11 +30,28 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
     """
     Handles an incoming chat request.
     This is the main public endpoint for user interaction.
+    It now supports session management to maintain conversation context.
     """
-    logger.info(f"Received chat request with query: '{request.query}'")
+    logger.info(f"Received chat request with query: '{request.query}' for session_id: '{request.session_id}'")
+
+    # If a session ID is provided, use the server-side history.
+    # The client-sent history is ignored in this case.
+    if request.session_id:
+        request.history = session_manager.get_history(request.session_id)
+        if request.history:
+            logger.info(f"Loaded {len(request.history)} messages from history for session_id: '{request.session_id}'")
     try:
         response = await process_chat_request(request)
         logger.info("Successfully processed chat request.")
+
+        # If a session ID was provided, update the history.
+        if request.session_id:
+            user_message = ChatMessage(role="user", content=request.query)
+            session_manager.update_history(
+                session_id=request.session_id,
+                user_query=user_message,
+                model_response_content=response.response
+            )
         return response
     except Exception as e:
         logger.critical(

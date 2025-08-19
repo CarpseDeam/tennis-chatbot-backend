@@ -45,8 +45,12 @@ class ChatRequest(BaseModel):
 
     Attributes:
         query (str): The user's current message or question. Must not be empty.
-        history (Optional[List[ChatMessage]]): The conversation history, if any,
-            to provide context to the language model.
+        session_id (Optional[str]): A unique identifier for the conversation session
+            to maintain context on the server. If provided, server-side history
+            will be used.
+        history (Optional[List[ChatMessage]]): The conversation history sent by the
+            client. This is ignored if a session_id is provided and history
+            exists on the server for that session.
     """
     query: str = Field(
         ...,
@@ -54,9 +58,13 @@ class ChatRequest(BaseModel):
         max_length=5000,
         description="The user's current message or question to the chat model."
     )
+    session_id: Optional[str] = Field(
+        default=None,
+        description="A unique identifier for the conversation session to maintain context on the server."
+    )
     history: Optional[List[ChatMessage]] = Field(
         default=None,
-        description="A list of previous messages to provide conversation context."
+        description="A list of previous messages to provide conversation context. This is ignored if a session_id is provided."
     )
 
 
