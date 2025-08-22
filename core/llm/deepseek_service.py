@@ -1,7 +1,7 @@
 # core/llm/deepseek_service.py
 import logging
 import json
-from typing import List
+from typing import List, AsyncGenerator
 from openai import AsyncOpenAI
 
 from .base import LLMService
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class DeepSeekService(LLMService):
-    """LLM Service for DeepSeek, now with tool-calling capabilities."""
+    """LLM Service for DeepSeek, with streaming and tool-calling."""
 
     def __init__(self):
         if not settings.deepseek_api_key:
@@ -37,12 +37,12 @@ class DeepSeekService(LLMService):
             messages.append({"role": role, "content": msg.content})
         return messages
 
-    async def generate_response_async(self, query: str, history: List[ChatMessage]) -> str:
-        """Generates a response, handling the tool-calling loop if necessary."""
+    async def generate_response_async(self, query: str, history: List[ChatMessage]) -> AsyncGenerator[str, None]:
+        """Generates a streaming response, handling the tool-calling loop."""
         messages = self._convert_history(history)
         messages.append({"role": "user", "content": query})
 
-        # Make the first call to see if a tool is needed
+        # First, a non-streaming call to check for tool usage efficiently.
         first_response = await self.client.chat.completions.create(
             model=self.model_name,
             messages=messages,
@@ -51,38 +51,34 @@ class DeepSeekService(LLMService):
         response_message = first_response.choices[0].message
         messages.append(response_message)
 
-        # Check if the model requested a tool call
+        # Determine the next step based on the model's response.
+        stream_request_messages = messages
+
         if response_message.tool_calls:
             tool_call = response_message.tool_calls[0]
             if tool_call.function.name == "web_search":
                 try:
-                    # Safely parse the function arguments JSON string
                     arguments = json.loads(tool_call.function.arguments)
                     search_query = arguments.get("query")
                 except json.JSONDecodeError:
-                    search_query = None
-
-                if not search_query:
-                    return "I'm sorry, I had trouble understanding what to search for."
+                    yield "I had an issue understanding what to search for."
+                    return
 
                 logger.info(f"DeepSeek requested tool call: web_search(query='{search_query}')")
-
-                # Execute the actual search function
                 tool_response_content = await google_search(search_query)
 
-                # Append the tool's result to the message history
-                messages.append({
-                    "tool_call_id": tool_call.id,
-                    "role": "tool",
-                    "name": "web_search",
-                    "content": tool_response_content,
+                # Prepare the messages for the final streaming call
+                stream_request_messages.append({
+                    "tool_call_id": tool_call.id, "role": "tool",
+                    "name": "web_search", "content": tool_response_content,
                 })
 
-                # Make the second call with the tool's result to get the final text response
-                second_response = await self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=messages
-                )
-                return second_response.choices[0].message.content
-
-        return response_message.content or "I'm sorry, I encountered an issue processing that request."
+        # The final call is ALWAYS a streaming call.
+        stream = await self.client.chat.completions.create(
+            model=self.model_name,
+            messages=stream_request_messages,
+            stream=True
+        )
+        async for chunk in stream:
+            content = chunk.choices[0].delta.content or ""
+            yield content
