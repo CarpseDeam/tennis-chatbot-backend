@@ -2,14 +2,11 @@
 import logging
 from typing import List, Dict, Any, AsyncGenerator
 import google.generativeai as genai
-
-# This is the critical import that fixes the crash.
 from google.generativeai import protos
 
 from .base import LLMService
 from config import settings
 from schemas.chat_schemas import ChatMessage
-# This correctly imports the schema from YOUR web_search.py file.
 from core.tools.web_search import google_search, SEARCH_TOOL_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -28,6 +25,7 @@ class GeminiService(LLMService):
         To do this, you MUST use the provided `web_search` tool to find the most current and accurate information.
         After getting the search results, synthesize them into a comprehensive and friendly answer."""
 
+        # The model is now initialized with the FunctionDeclaration object.
         self.model = genai.GenerativeModel(
             model_name="gemini-1.5-flash",
             system_instruction=system_instruction,
@@ -57,10 +55,8 @@ class GeminiService(LLMService):
                 search_query = function_call.args['query']
                 logger.info(f"Gemini requested tool call: web_search(query='{search_query}')")
 
-                # Your web_search.py gets called here and returns its results.
                 tool_response_content = await google_search(search_query)
 
-                # This is the corrected block that was causing the crash.
                 response_part = protos.Part(
                     function_response=protos.FunctionResponse(
                         name='web_search',

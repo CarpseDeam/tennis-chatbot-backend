@@ -1,33 +1,29 @@
 # core/tools/web_search.py
 """
 Defines the web search tool for the LLM.
-
-This module provides a function that connects to the Google Custom Search API
-to find real-time information on the web. The results are formatted into a
-clean string that the LLM can easily understand and use to answer questions.
 """
 import logging
 import httpx
 from config import settings
 
+# --- THIS IS THE CRITICAL CHANGE ---
+# We use the official library helper to define the tool, which prevents conversion errors.
+from google.generativeai import types as genai_types
+
 logger = logging.getLogger(__name__)
 
-# This is the schema that tells the LLM how to use our tool.
-# It's defined here so it's co-located with the function itself.
-SEARCH_TOOL_SCHEMA = {
-    "name": "web_search",
-    "description": "Searches the web for information about tennis players, tournaments, rankings, and recent news.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "The search query to find information on the web. Should be a targeted question or search term."
-            }
+# This schema is now built using the library's official classes, guaranteeing compatibility.
+SEARCH_TOOL_SCHEMA = genai_types.FunctionDeclaration(
+    name="web_search",
+    description="Searches the web for up-to-date information on a given topic, especially for recent tennis matches, player rankings, or news.",
+    parameters=genai_types.Schema(
+        type=genai_types.Type.OBJECT,
+        properties={
+            "query": genai_types.Schema(type=genai_types.Type.STRING, description="The precise search query to use.")
         },
-        "required": ["query"]
-    }
-}
+        required=["query"]
+    )
+)
 
 
 async def google_search(query: str) -> str:
@@ -43,13 +39,13 @@ async def google_search(query: str) -> str:
         'key': settings.google_search_api_key,
         'cx': settings.google_cse_id,
         'q': query,
-        'num': 5  # Get the top 5 results
+        'num': 5
     }
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, params=params)
-            response.raise_for_status()  # Will raise an exception for 4xx/5xx responses
+            response.raise_for_status()
 
         search_results = response.json()
         items = search_results.get("items", [])
@@ -57,7 +53,6 @@ async def google_search(query: str) -> str:
         if not items:
             return "No relevant results found on the web for that query."
 
-        # Format the results into a string for the LLM
         formatted_results = []
         for i, item in enumerate(items):
             result = (
