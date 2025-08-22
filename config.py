@@ -1,9 +1,6 @@
 # config.py
 import os
-from typing import Optional
-
 from dotenv import load_dotenv
-from pydantic import HttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv(override=True)
@@ -12,23 +9,18 @@ load_dotenv(override=True)
 class Settings(BaseSettings):
     """
     Defines the application's configuration settings.
+    This has been simplified to only include settings required by the current application.
     """
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
     # --- Required API Keys ---
-    google_api_key: str  # For Gemini
-    tennis_api_key: str
-    admin_api_key: str
+    google_api_key: str  # For the Gemini LLM in the chat endpoint
+    admin_api_key: str   # For securing any admin/debug endpoints (good practice)
 
-    # --- Google Search Keys (Now Required!) ---
-    google_search_api_key: str
-    google_cse_id: str
-
-    # --- API Service Hosts ---
-    tennis_api_host: str
-
-    # --- Custom Scraper Service URL ---
-    tenipo_api_base_url: Optional[HttpUrl] = None
+    # --- Redis Configuration ---
+    # Railway will provide this URL automatically in production.
+    # For local development, it defaults to a standard local Redis instance.
+    redis_url: str = "redis://localhost:6379"
 
     # --- General Settings ---
     log_level: str = "INFO"
