@@ -2,7 +2,6 @@
 import logging
 from typing import List, Dict, Any, AsyncGenerator
 import google.generativeai as genai
-# --- THIS IMPORT IS THE CORRECT AND ROBUST WAY ---
 from google.generativeai import types as genai_types
 
 from .base import LLMService
@@ -49,25 +48,33 @@ class GeminiService(LLMService):
         response = await chat.send_message_async(query)
 
         try:
+            # --- THIS IS THE CORRECTED LOGIC BLOCK ---
             function_call = response.candidates[0].content.parts[0].function_call
+
+            # This check now happens INSIDE the try block.
+            if function_call.name == "web_search":
+                search_query = function_call.args['query']
+                logger.info(f"Gemini requested tool call: web_search(query='{search_query}')")
+
+                tool_response_content = await google_search(search_query)
+
+                final_response_stream = await chat.send_message_async(
+                    genai_types.FunctionResponse(name="web_search", response={"result": tool_response_content}),
+                    stream=True
+                )
+
+                async for chunk in final_response_stream:
+                    if chunk.text:
+                        yield chunk.text
+            else:
+                # The model tried to call a tool we don't know about.
+                yield "I'm sorry, I tried to use an unknown tool."
+
         except (ValueError, AttributeError, IndexError):
+            # If ANY part of finding the function_call fails, it means no tool was called.
+            # In this case, the first response contains the complete text.
             if response.text:
                 yield response.text
-            return
-
-        if function_call.name == "web_search":
-            search_query = function_call.args['query']
-            logger.info(f"Gemini requested tool call: web_search(query='{search_query}')")
-
-            tool_response_content = await google_search(search_query)
-
-            final_response_stream = await chat.send_message_async(
-                genai_types.FunctionResponse(name="web_search", response={"result": tool_response_content}),
-                stream=True
-            )
-
-            async for chunk in final_response_stream:
-                if chunk.text:
-                    yield chunk.text
-        else:
-            yield "I'm sorry, I tried to use a tool I don't have access to."
+            else:
+                # Handle the edge case where the response is empty.
+                yield "I'm sorry, I could not generate a response."
