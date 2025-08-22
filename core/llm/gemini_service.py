@@ -2,7 +2,8 @@
 import logging
 from typing import List, Dict, Any, AsyncGenerator
 import google.generativeai as genai
-from google.generativeai.types import FunctionDeclaration
+# --- THIS IMPORT IS THE CORRECT AND ROBUST WAY ---
+from google.generativeai import types as genai_types
 
 from .base import LLMService
 from config import settings
@@ -26,9 +27,9 @@ class GeminiService(LLMService):
         After getting the search results, synthesize them into a comprehensive and friendly answer."""
 
         self.model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
+            model_name="gemini-1.5-flash",
             system_instruction=system_instruction,
-            tools=[FunctionDeclaration(**SEARCH_TOOL_SCHEMA)]
+            tools=[genai_types.FunctionDeclaration(**SEARCH_TOOL_SCHEMA)]
         )
         logger.info("Google Gemini service initialized in TOOL-CALLING mode.")
 
@@ -45,34 +46,28 @@ class GeminiService(LLMService):
         gemini_history = self._convert_history(history)
         chat = self.model.start_chat(history=gemini_history)
 
-        # The first API call is non-streaming to efficiently check for tool usage.
         response = await chat.send_message_async(query)
-
-        final_response_stream = None
 
         try:
             function_call = response.candidates[0].content.parts[0].function_call
-            if function_call.name == "web_search":
-                search_query = function_call.args['query']
-                logger.info(f"Gemini requested tool call: web_search(query='{search_query}')")
-                tool_response_content = await google_search(search_query)
-
-                # After executing the tool, the second call is streamed.
-                final_response_stream = await chat.send_message_async(
-                    [genai.types.Part(function_response=genai.types.FunctionResponse(
-                        name="web_search",
-                        response={"result": tool_response_content}
-                    ))],
-                    stream=True
-                )
         except (ValueError, AttributeError, IndexError):
-            # No tool call was requested. The initial response contains the full text.
-            # We yield the complete text to fulfill the streaming contract.
             if response.text:
                 yield response.text
             return
 
-        if final_response_stream:
+        if function_call.name == "web_search":
+            search_query = function_call.args['query']
+            logger.info(f"Gemini requested tool call: web_search(query='{search_query}')")
+
+            tool_response_content = await google_search(search_query)
+
+            final_response_stream = await chat.send_message_async(
+                genai_types.FunctionResponse(name="web_search", response={"result": tool_response_content}),
+                stream=True
+            )
+
             async for chunk in final_response_stream:
                 if chunk.text:
                     yield chunk.text
+        else:
+            yield "I'm sorry, I tried to use a tool I don't have access to."
