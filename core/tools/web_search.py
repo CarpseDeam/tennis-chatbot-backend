@@ -6,23 +6,28 @@ import logging
 import httpx
 from config import settings
 
-# --- THIS IS THE CRITICAL CHANGE ---
-# We use the official library helper to define the tool, which prevents conversion errors.
-from google.generativeai import types as genai_types
+# --- THIS IS THE CORRECT IMPORT AND IMPLEMENTATION ---
+# The required classes are in the 'protos' module.
+from google.generativeai import protos
 
 logger = logging.getLogger(__name__)
 
-# This schema is now built using the library's official classes, guaranteeing compatibility.
-SEARCH_TOOL_SCHEMA = genai_types.FunctionDeclaration(
-    name="web_search",
-    description="Searches the web for up-to-date information on a given topic, especially for recent tennis matches, player rankings, or news.",
-    parameters=genai_types.Schema(
-        type=genai_types.Type.OBJECT,
-        properties={
-            "query": genai_types.Schema(type=genai_types.Type.STRING, description="The precise search query to use.")
-        },
-        required=["query"]
-    )
+# This schema is now built using the correct, verified proto classes.
+# The FunctionDeclaration must be wrapped inside a protos.Tool object.
+SEARCH_TOOL_SCHEMA = protos.Tool(
+    function_declarations=[
+        protos.FunctionDeclaration(
+            name="web_search",
+            description="Searches the web for up-to-date information on a given topic, especially for recent tennis matches, player rankings, or news.",
+            parameters=protos.Schema(
+                type=protos.Type.OBJECT,
+                properties={
+                    "query": protos.Schema(type=protos.Type.STRING, description="The precise search query to use.")
+                },
+                required=["query"]
+            )
+        )
+    ]
 )
 
 
