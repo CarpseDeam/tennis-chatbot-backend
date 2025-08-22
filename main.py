@@ -4,10 +4,9 @@ import uvicorn
 from fastapi import FastAPI
 from typing import Dict
 
-# Import all three of our routers
 from api.routers.chat import router as chat_router
 from api.routers.predict import router as predict_router
-from api.routers.orchestrate import router as orchestrate_router # <-- ADD THIS
+from api.routers.orchestrate import router as orchestrate_router
 
 # --- Logging Configuration ---
 logging.basicConfig(
@@ -20,14 +19,14 @@ logger = logging.getLogger(__name__)
 # --- FastAPI Application Initialization ---
 app = FastAPI(
     title="Tennis AI API",
-    version="2.1.0", # Version 2.1 with Orchestration!
+    version="2.2.0", # Final, working version
     description="An API combining a quantitative ML model, a conversational LLM, and an orchestration layer.",
 )
 
 # --- Include API Routers ---
 app.include_router(chat_router)
 app.include_router(predict_router)
-app.include_router(orchestrate_router) # <-- ADD THIS
+app.include_router(orchestrate_router)
 logger.info("Chat, Prediction, and Orchestration API routers included successfully.")
 
 
@@ -42,4 +41,3 @@ def root() -> Dict[str, str]:
 if __name__ == "__main__":
     logger.info("Starting Uvicorn server...")
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-
