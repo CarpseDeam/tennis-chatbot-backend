@@ -3,7 +3,7 @@ import os
 from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Literal
+from typing import Literal, Optional
 
 load_dotenv(override=True)
 
@@ -11,7 +11,7 @@ load_dotenv(override=True)
 class Settings(BaseSettings):
     """
     Defines the application's configuration settings.
-    This has been simplified to only include settings required by the current application.
+    Now supports multiple LLM providers and optional web search capabilities.
     """
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     )
 
     # --- Provider-Specific API Keys ---
-    google_api_key: str | None = None
-    deepseek_api_key: str | None = None
+    google_api_key: Optional[str] = None
+    deepseek_api_key: Optional[str] = None
 
     # --- DeepSeek Model Configuration ---
     deepseek_model_name: str = Field(
@@ -31,12 +31,12 @@ class Settings(BaseSettings):
         description="The DeepSeek model to use (e.g., 'deepseek-chat' or 'deepseek-reasoner')."
     )
 
+    # --- NEW: Google Custom Search API Keys for the Web Search Tool ---
+    google_search_api_key: Optional[str] = None
+    google_cse_id: Optional[str] = None
+
     # --- Other Keys & Settings ---
     admin_api_key: str
-
-    # --- Redis Configuration ---
-    # This is now a REQUIRED field. The app will not start without the
-    # REDIS_URL environment variable from Railway or your .env file.
     redis_url: str
 
     # --- General Settings ---
