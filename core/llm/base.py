@@ -1,0 +1,27 @@
+# core/llm/base.py
+"""
+Defines the abstract base class for all LLM services.
+This creates a contract that any new provider must follow.
+"""
+from abc import ABC, abstractmethod
+from typing import List
+from schemas.chat_schemas import ChatMessage
+
+class LLMService(ABC):
+    """Abstract base class for a language model service."""
+
+    @abstractmethod
+    async def generate_response_async(
+        self, query: str, history: List[ChatMessage]
+    ) -> str:
+        """
+        Generates a response from the language model.
+
+        Args:
+            query: The user's current query.
+            history: The conversation history.
+
+        Returns:
+            The natural language response from the model.
+        """
+        pass

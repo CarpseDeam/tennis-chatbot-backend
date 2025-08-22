@@ -1,22 +1,17 @@
 # api/routers/predict.py
-
 """
 Defines the FastAPI router for the machine learning prediction endpoint.
-
-This module is responsible for the purely quantitative part of the application.
-It exposes a `/api/predict` endpoint that takes a massive, raw JSON blob,
-uses a parser to extract the necessary features, transforms them, and uses the
-pre-trained XGBoost model to generate a win probability.
 """
-
 import joblib
 import pandas as pd
 import logging
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
-from typing import Literal, Dict, Any
+from typing import Dict, Any
 
-from core.json_parser import parse_live_match_json  # <-- IMPORT OUR NEW PARSER
+# --- IMPORTS HAVE CHANGED ---
+from core.json_parser import parse_live_match_json
+# Import the data contracts from their new, central location
+from schemas.predict_schemas import MatchData, PredictionResponse
 
 # --- Logger ---
 logger = logging.getLogger(__name__)
@@ -37,28 +32,7 @@ router = APIRouter(
     tags=["Prediction"]
 )
 
-
-# --- Data Contracts (Pydantic Models) ---
-# These models now represent our CLEAN, INTERNAL data structure, not the messy input.
-class PlayerData(BaseModel):
-    rank: int = Field(..., example=10)
-    points: int = Field(..., example=3000)
-    age: float | None = Field(None, example=25.5)
-    height: int | None = Field(None, example=185)
-    plays_right_handed: bool | None = Field(None, example=True)
-
-
-class MatchData(BaseModel):
-    player1: PlayerData
-    player2: PlayerData
-    surface: Literal['Clay', 'Hard', 'Grass', 'Carpet'] = Field(..., example='Hard')
-    best_of: int = Field(..., example=3)
-
-
-class PredictionResponse(BaseModel):
-    predicted_winner: Literal['Player 1', 'Player 2']
-    p1_win_probability: float = Field(..., example=0.6238)
-
+# --- THE PYDANTIC MODELS HAVE BEEN MOVED TO schemas/predict_schemas.py ---
 
 # --- Model Loading ---
 try:
@@ -102,7 +76,7 @@ def transform_to_feature_vector(data: MatchData) -> pd.DataFrame:
     return df[MODEL_FEATURE_BLUEPRINT]
 
 
-# --- Prediction Endpoint (UPDATED) ---
+# --- Prediction Endpoint ---
 @router.post("/predict", response_model=PredictionResponse)
 async def predict_match(huge_request_body: Dict[str, Any]) -> PredictionResponse:
     """
@@ -115,10 +89,7 @@ async def predict_match(huge_request_body: Dict[str, Any]) -> PredictionResponse
         )
 
     try:
-        # STEP 1: Use our new parser to extract clean data from the mess.
         clean_match_data = parse_live_match_json(huge_request_body)
-
-        # STEP 2: The rest of the process is the same as before!
         feature_vector = transform_to_feature_vector(clean_match_data)
         prediction_probabilities = model.predict_proba(feature_vector)
         p1_win_probability = prediction_probabilities[0][1]
@@ -128,7 +99,7 @@ async def predict_match(huge_request_body: Dict[str, Any]) -> PredictionResponse
             p1_win_probability=round(p1_win_probability, 4)
         )
     except ValueError as e:
-        # This catches parsing errors from our new function.
+        # This catches parsing errors.
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         logger.error(f"An unexpected error occurred during prediction: {e}", exc_info=True)

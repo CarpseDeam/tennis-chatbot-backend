@@ -10,6 +10,7 @@ redis
 
 # --- LLM & AI ---
 google-generativeai
+openai  # <-- ADD THIS FOR DEEPSEEK
 
 # --- Core Data Handling & Numerics ---
 pandas

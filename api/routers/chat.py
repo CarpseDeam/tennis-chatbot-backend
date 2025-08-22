@@ -11,7 +11,7 @@ primary interface between the web server and the application's core logic.
 
 import logging
 from fastapi import APIRouter, HTTPException, status
-from core.llm_processor import process_chat_request
+from core.chat_orchestrator import process_chat_request
 from schemas.chat_schemas import ChatRequest, ChatResponse, ChatMessage
 from .. import session_manager
 
